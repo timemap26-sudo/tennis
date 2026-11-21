@@ -236,7 +236,7 @@ const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 
 let gt = 0;                // 遊戲時間（給電腦算跳躍時機）
 let fx = [], scorch = [];  // 特效粒子、地上的焦痕
 const obj = w => (w === 'P' ? P : A);
-const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null, fire: false, g: G };
+const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, g: G };
 
 function newMatch() {
   D = DIFFS[diffKey];
@@ -265,7 +265,7 @@ function setupServe() {
   rcv.x = boxSign * 2.4; rcv.y = r * 12.6;
   P.swing = 0; A.swing = 0; A.plan = null;
   for (const p of [P, A]) { p.z = 0; p.vz = 0; p.sType = 'drive'; }
-  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null, fire: false, g: G });
+  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, g: G });
   holdBall();
   phase = 'serve';
   aiServeTimer = rand(0.8, 1.3);
@@ -291,12 +291,6 @@ function launch(tx, ty, T, netErr, minClear, g = G) {
   if (netErr) { const tn = -b.y / vy; if (tn > 0) vz = (0.45 - b.z + 0.5 * g * tn * tn) / tn; }
   b.vx = vx; b.vy = vy; b.vz = vz; b.g = g;
   b.held = false; b.tossed = false; b.bounces = 0; b.netHit = false; b.fire = false;
-  // 高吊球：算出落點，畫地面標記方便判斷距離
-  const apex = b.z + Math.max(0, vz) ** 2 / (2 * g);
-  if (apex > 2.8 && !netErr) {
-    const tl = (vz + Math.sqrt(vz * vz + 2 * g * b.z)) / g;
-    b.mark = [b.x + vx * tl, b.y + vy * tl, b.x, b.y];
-  } else b.mark = null;
   play('hit');
 }
 
@@ -569,7 +563,7 @@ function snapshot() {
   return {
     t: 's', mode, ph: phase, cs: curServer, st: serveTry, mo: matchOver, tg: target, sc,
     P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType, r(P.z), Math.round(P.en)], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType, r(A.z), Math.round(A.en)],
-    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0, ball.fire ? 1 : 0], mk: ball.mark ? ball.mark.map(r) : 0,
+    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0, ball.fire ? 1 : 0],
     ev: events.splice(0),
   };
 }
@@ -577,7 +571,6 @@ function snapshot() {
 function onGuestData(d) {
   if (!d || d.t !== 's') return;
   for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; }
-  ball.mark = Array.isArray(d.mk) && d.mk.length === 4 ? d.mk : null;
   [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5];
   if (!ball.held) { ball.trail.push([ball.x, ball.y, ball.z]); if (ball.trail.length > 8) ball.trail.shift(); } else ball.trail.length = 0;
   sc = d.sc; phase = d.ph; curServer = d.cs; serveTry = d.st; target = d.tg; matchOver = d.mo;
@@ -709,7 +702,7 @@ function stepBall(dt) {
   if (!b.netHit && (oy > 0) !== (b.y > 0) && Math.abs(b.x) < POST) {
     const nh = NET + 0.156 * (b.x / POST) ** 2;
     if (b.z < nh) {
-      b.netHit = true; b.mark = null; b.y = oy > 0 ? 0.08 : -0.08; b.vy *= -0.12; b.vx *= 0.3; b.vz = Math.min(b.vz, 0);
+      b.netHit = true; b.y = oy > 0 ? 0.08 : -0.08; b.vy *= -0.12; b.vx *= 0.3; b.vz = Math.min(b.vz, 0);
       play('net');
       if (phase === 'rally') { b.isServe ? fault('掛網！') : pointTo(opp(b.lastHitter), '掛網！'); }
     }
@@ -717,7 +710,6 @@ function stepBall(dt) {
   // 彈地
   if (b.z <= 0 && b.vz < 0) {
     b.z = 0;
-    b.mark = null;
     if (b.vz < -0.8) {
       const kick = b.bounces === 0 && b.g > G ? 0.95 : 0.8;   // 上旋球落地往前竄
       b.vz = Math.min(-b.vz * 0.72, 11); b.vx *= kick; b.vy *= kick; play('bounce');
@@ -1319,8 +1311,7 @@ function drawUmpire() {
 }
 function drawBall() {
   const b = ball;
-  drawShadow(b.x, b.y, 0.1, 0.045, clamp(0.5 - b.z * 0.06, 0.25, 0.5));
-  if (!b.held && b.z > 1.2) { // 球到影子的垂直虛線，看得出高度
+  if (!b.held && b.z > 1.2) { // 球到地面的垂直虛線，看得出高度
     const a = P3(b.x, b.y, 0), c = P3(b.x, b.y, b.z);
     ctx.save(); ctx.setLineDash([3, 4]); ctx.strokeStyle = 'rgba(233,255,79,.35)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.restore();
@@ -1383,23 +1374,6 @@ function drawRuler(p, who) {
   const t = p.z.toFixed(1) + ' m';
   ctx.strokeText(t, h[0], h[1]); ctx.fillStyle = '#fff'; ctx.fillText(t, h[0], h[1]);
   ctx.restore();
-}
-// 高吊球落點：地上的圈會隨球接近而縮小，圈縮到最小時球就落地
-function drawLandMark() {
-  const mk = ball.mark;
-  if (!mk || ball.held || mode !== 'play') return;
-  const [lx, ly, sx, sy] = mk;
-  const tot = Math.hypot(lx - sx, ly - sy) || 1, rem = clamp(Math.hypot(lx - ball.x, ly - ball.y) / tot, 0, 1);
-  const ringPath = r => {
-    ctx.beginPath();
-    for (let i = 0; i <= 28; i++) { const a = i / 28 * TAU, p = P3(lx + Math.cos(a) * r, ly + Math.sin(a) * r, 0); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }
-  };
-  ringPath(0.32); ctx.fillStyle = 'rgba(233,255,79,.28)'; ctx.fill();
-  ctx.strokeStyle = 'rgba(233,255,79,.9)'; ctx.lineWidth = 2; ctx.stroke();
-  ringPath(0.32 + rem * 1.6); ctx.strokeStyle = `rgba(255,255,255,${0.35 + 0.5 * (1 - rem)})`; ctx.lineWidth = 2; ctx.stroke();
-  const c = P3(lx, ly, 0);
-  ctx.strokeStyle = 'rgba(233,255,79,.9)'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(c[0] - 0.18 * c[2], c[1]); ctx.lineTo(c[0] + 0.18 * c[2], c[1]); ctx.moveTo(c[0], c[1] - 0.08 * c[2]); ctx.lineTo(c[0], c[1] + 0.08 * c[2]); ctx.stroke();
 }
 function drawHUD() {
   if (!sc || mode === 'menu') return;
@@ -1485,7 +1459,6 @@ function render(dt) {
   drawGround();
   drawBoards();
   drawScorch();
-  drawLandMark();
   const k = FLIP ? -1 : 1;
   const items = [[A.y * k, () => drawPlayer(A, 'A')], [0, drawNet], [0, drawUmpire], [P.y * k, () => drawPlayer(P, 'P')], [ball.y * k, drawBall]];
   items.sort((a, b) => a[0] - b[0]).forEach(i => i[1]());
