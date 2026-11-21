@@ -42,12 +42,33 @@
   #bFlip { right:202px; bottom:26px; width:58px; height:58px; background:rgba(220,140,255,.3); font-size:13px; }
   #pauseBtn { position:fixed; top:10px; right:10px; z-index:6; padding:6px 12px; font-size:14px; }
   #netTag { position:fixed; top:12px; right:12px; z-index:6; font-size:12px; padding:5px 10px; border-radius:999px; background:rgba(8,16,24,.8); }
+  /* 連線聊天 */
+  #chatBtn { position:fixed; top:44px; right:12px; z-index:11; padding:6px 12px; font-size:14px; background:rgba(8,16,24,.8); }
+  #chatBtn.unread { border-color:var(--accent); box-shadow:0 0 10px rgba(233,255,79,.6); }
+  #chat { position:fixed; left:10px; top:124px; width:min(300px, calc(100vw - 20px)); z-index:11; pointer-events:none; }
+  #chatLog .m { width:fit-content; max-width:100%; margin-bottom:4px; padding:4px 9px; border-radius:9px; background:rgba(8,16,24,.75); font-size:14px; line-height:1.4; word-break:break-word; transition:opacity .8s; }
+  #chatLog .m.old { opacity:0; }
+  #chat.open #chatLog .m.old { opacity:.85; }
+  #chatBar { pointer-events:auto; background:rgba(8,16,24,.88); border:1px solid rgba(255,255,255,.15); border-radius:12px; padding:8px; margin-top:4px; }
+  #chatQuick { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+  #chatQuick button { padding:5px 9px; font-size:14px; border-radius:999px; }
+  #chatRow { display:flex; gap:6px; }
+  #chatIn { text-transform:none; letter-spacing:normal; text-align:left; padding:8px 10px; }
+  #chatRow button { padding:8px 12px; background:var(--accent); color:#1b2a10; border:none; font-weight:700; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <button id="pauseBtn" class="hidden">⏸ 暫停</button>
 <div id="netTag" class="hidden"></div>
+<button id="chatBtn" class="hidden">💬 聊天</button>
+<div id="chat" class="hidden">
+  <div id="chatLog"></div>
+  <div id="chatBar" class="hidden">
+    <div id="chatQuick"><button>👍 好球！</button><button>😂</button><button>😱 好險</button><button>🔥</button><button>再來一場！</button><button>GG</button></div>
+    <div id="chatRow"><input id="chatIn" maxlength="60" placeholder="輸入訊息，Enter 送出" autocomplete="off" enterkeyhint="send"><button id="chatSend">送出</button></div>
+  </div>
+</div>
 
 <div id="menu" class="overlay">
   <div class="card">
@@ -376,7 +397,13 @@ function localJump() {
 }
 
 addEventListener('keydown', e => {
+  if (e.target.id === 'chatIn') {
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); sendChat(chatIn.value); chatOpen(false); }
+    else if (e.key === 'Escape') chatOpen(false);
+    return;
+  }
   if (e.target.tagName === 'INPUT') { if (e.code === 'Enter') $('joinBtn').click(); return; }
+  if (e.key === 'Enter' && canChat()) { e.preventDefault(); chatOpen(true); return; }
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   keys[e.code] = true;
   if (e.repeat) return;
@@ -429,6 +456,7 @@ function enterGameUI() {
   $('pauseBtn').classList.toggle('hidden', !!net);
   $('netTag').classList.toggle('hidden', !net);
   if (net) $('netTag').textContent = net.role === 'host' ? '🌐 連線中（主機）' : '🌐 連線中';
+  $('chatBtn').classList.toggle('hidden', !net); $('chat').classList.toggle('hidden', !net);
   if (isTouch) touchEl.classList.remove('hidden');
 }
 function startGame() {
@@ -485,6 +513,7 @@ $('lobbyCancel').onclick = toMenu;
 function leaveNet() {
   const n = net; net = null; FLIP = false; NAMES = { P: '你', A: '電腦' }; events = []; remoteIn = { dx: 0, dy: 0 };
   if (n) { try { n.conn && n.conn.close(); } catch (e) {} try { n.peer && n.peer.destroy(); } catch (e) {} }
+  resetChat();
 }
 function netLost(text) {
   if (!net) return;
@@ -553,7 +582,8 @@ $('joinBtn').onclick = () => joinRoom($('codeIn').value);
 // 主機收到客人的訊息
 function onHostData(d) {
   if (!d || typeof d !== 'object') return;
-  if (d.t === 'i') remoteIn = { dx: clamp(+d.dx || 0, -1, 1), dy: clamp(+d.dy || 0, -1, 1) };
+  if (d.t === 'chat') recvChat(d);
+  else if (d.t === 'i') remoteIn = { dx: clamp(+d.dx || 0, -1, 1), dy: clamp(+d.dy || 0, -1, 1) };
   else if (d.t === 'shot') pressShot('A', SHOTS.includes(d.type) ? d.type : 'drive');
   else if (d.t === 'jump') pressJump('A');
   else if (d.t === 'again' && mode === 'over') startGame();
@@ -569,7 +599,9 @@ function snapshot() {
 }
 // 客人收到主機的畫面狀態
 function onGuestData(d) {
-  if (!d || d.t !== 's') return;
+  if (!d) return;
+  if (d.t === 'chat') { recvChat(d); return; }
+  if (d.t !== 's') return;
   for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; }
   [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5];
   if (!ball.held) { ball.trail.push([ball.x, ball.y, ball.z]); if (ball.trail.length > 8) ball.trail.shift(); } else ball.trail.length = 0;
@@ -590,6 +622,65 @@ function guestSendInput(now) {
   if ((s !== lastSent || now - lastSentT > 250) && net.conn && net.conn.open) {
     net.conn.send({ t: 'i', dx: +inp.dx.toFixed(2), dy: +inp.dy.toFixed(2) });
     lastSent = s; lastSentT = now;
+  }
+}
+
+// ====== 聊天（連線對戰）======
+const chatEl = $('chat'), chatLog = $('chatLog'), chatIn = $('chatIn'), chatBtn = $('chatBtn');
+let bubbles = {}, chatAt = 0;
+const canChat = () => !!(net && net.conn && net.conn.open);
+const cleanChat = t => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+function chatOpen(on) {
+  if (on && !canChat()) return;
+  chatEl.classList.toggle('open', on); $('chatBar').classList.toggle('hidden', !on);
+  for (const k in keys) keys[k] = false;
+  if (on) { chatBtn.classList.remove('unread'); chatIn.focus(); } else chatIn.blur();
+}
+function addChat(who, text) {
+  const d = document.createElement('div'); d.className = 'm';
+  const n = document.createElement('b');
+  n.textContent = (who === me() ? '你' : '對手') + '：'; n.style.color = who === 'P' ? '#ff6b5e' : '#ffd23f';
+  d.append(n, document.createTextNode(text)); chatLog.append(d);
+  while (chatLog.children.length > 6) chatLog.firstChild.remove();
+  setTimeout(() => d.classList.add('old'), 8000);
+  bubbles[who] = { text: text.length > 16 ? text.slice(0, 15) + '…' : text, until: performance.now() + 4500 };
+}
+function sendChat(text) {
+  text = cleanChat(text); chatIn.value = '';
+  const now = performance.now();
+  if (!text || !canChat() || now - chatAt < 400) return;
+  chatAt = now;
+  try { net.conn.send({ t: 'chat', m: text }); } catch (e) { return; }
+  addChat(me(), text);
+}
+function recvChat(d) {
+  const text = cleanChat(d.m); if (!text) return;
+  addChat(opp(me()), text);
+  snd(1046, 0.09, 'sine', 0.08);
+  if (!chatEl.classList.contains('open')) chatBtn.classList.add('unread');
+}
+function resetChat() {
+  chatOpen(false); chatLog.textContent = ''; bubbles = {};
+  chatBtn.classList.add('hidden'); chatBtn.classList.remove('unread'); chatEl.classList.add('hidden');
+}
+chatBtn.onclick = () => chatOpen(!chatEl.classList.contains('open'));
+$('chatSend').onclick = () => { sendChat(chatIn.value); chatOpen(false); };
+$('chatQuick').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { sendChat(b.textContent); chatOpen(false); } });
+// 頭上的對話泡泡
+function drawBubbles() {
+  const now = performance.now();
+  for (const who of ['P', 'A']) {
+    const b = bubbles[who]; if (!b || now > b.until) continue;
+    const p = obj(who), s = P3(p.x, p.y, (p.z || 0) + 2.6);
+    ctx.save(); ctx.globalAlpha = Math.min(1, (b.until - now) / 400);
+    ctx.font = '600 15px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const w = ctx.measureText(b.text).width + 22, h = 30;
+    const x = clamp(s[0], w / 2 + 6, W - w / 2 - 6), y = Math.max(h + 6, s[1]);
+    ctx.fillStyle = 'rgba(255,255,255,.95)';
+    ctx.beginPath(); ctx.roundRect(x - w / 2, y - h, w, h, 13); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(s[0] - 7, y - 1); ctx.lineTo(s[0] + 7, y - 1); ctx.lineTo(s[0], y + 8); ctx.fill();
+    ctx.fillStyle = '#16202a'; ctx.fillText(b.text, x, y - h / 2 + 1);
+    ctx.restore();
   }
 }
 
@@ -1455,6 +1546,7 @@ function render(dt) {
   const v = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.35, W / 2, H * 0.55, Math.max(W, H) * 0.8);
   v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.35)');
   ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  drawBubbles();
   drawHUD();
   drawMsg(dt);
 }
