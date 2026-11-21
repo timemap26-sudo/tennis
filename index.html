@@ -70,10 +70,10 @@
     <div class="seg"><button class="net" id="hostBtn">建立房間</button></div>
     <div class="seg" style="margin-top:8px"><input id="codeIn" placeholder="房間代碼" maxlength="6" autocomplete="off"><button class="net" id="joinBtn">加入房間</button></div>
     <div class="help" id="helpKeys">
-      <kbd>←↑→↓</kbd> / <kbd>WASD</kbd> 移動<br>
+      <kbd>←↑→↓</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
-      <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>P</kbd> 暫停（單機）<br>
-      <kbd>E</kbd> 🔥 火球（能量滿才能用）· <kbd>K</kbd> 跳五層樓高扣殺 · <kbd>L</kbd> 後空翻擊球<br>
+      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>S</kbd> 跳五層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）<br>
+      <kbd>P</kbd> 暫停（單機）<br>
       擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
       高吊球會在地上標出落點圈，圈縮到最小時球就落地。
     </div>
@@ -329,8 +329,8 @@ function useFire(who) {
 const keys = {};
 const joy = { x: 0, y: 0 };
 function localInput() {
-  let dx = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
-  let dy = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+  let dx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+  let dy = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
   if (Math.abs(joy.x) > 0.15 || Math.abs(joy.y) > 0.15) { dx = joy.x; dy = joy.y; }
   return { dx, dy };
 }
@@ -388,9 +388,10 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.code === 'Space' || e.code === 'KeyJ') localShot('drive');
   if (e.code === 'KeyF' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') localShot('lob');
-  if (e.code === 'KeyE' || e.code === 'KeyU') localShot('fire');
-  if (e.code === 'KeyK' || e.code === 'KeyC') localJump();
-  if (e.code === 'KeyL' || e.code === 'KeyX') localShot('flip');
+  // 特殊球：左手 A S D F
+  if (e.code === 'KeyA') localShot('fire');
+  if (e.code === 'KeyS') localJump();
+  if (e.code === 'KeyD') localShot('flip');
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -1432,7 +1433,7 @@ function drawHUD() {
   ctx.font = '13px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
   ctx.globalAlpha = full ? 0.6 + 0.4 * Math.sin(performance.now() / 120) : 0.6; ctx.fillText('🔥', x + 7, ey + 8); ctx.globalAlpha = 1;
   ctx.font = '600 11px system-ui,sans-serif'; ctx.fillStyle = full ? '#ffb347' : 'rgba(255,255,255,.6)';
-  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 E 打火球！') : '火球充能中', x + 140, ey + 8);
+  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 A 打火球！') : '火球充能中', x + 140, ey + 8);
   if (mode === 'play' && phase === 'serve') {
     ctx.textAlign = 'center'; ctx.font = '600 15px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.9)';
     const t = curServer === me()
