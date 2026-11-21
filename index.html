@@ -45,30 +45,30 @@
   #pauseBtn { position:fixed; top:10px; right:10px; z-index:6; padding:6px 12px; font-size:14px; }
   #netTag { position:fixed; top:12px; right:12px; z-index:6; font-size:12px; padding:5px 10px; border-radius:999px; background:rgba(8,16,24,.8); }
   /* 連線聊天 */
-  #chatBtn { position:fixed; top:44px; right:12px; z-index:11; padding:6px 12px; font-size:14px; background:rgba(8,16,24,.8); }
-  #chatBtn.unread { border-color:var(--accent); box-shadow:0 0 10px rgba(233,255,79,.6); }
-  #chat { position:fixed; left:10px; top:124px; width:min(300px, calc(100vw - 20px)); z-index:11; pointer-events:none; }
+  #chat { position:fixed; left:50%; bottom:6px; transform:translateX(-50%); width:min(380px, calc(100vw - 20px)); z-index:11; pointer-events:none; display:flex; flex-direction:column; }
+  body.touchUI #chat { bottom:200px; width:min(340px, calc(100vw - 20px)); }
   #chatLog .m { width:fit-content; max-width:100%; margin-bottom:4px; padding:4px 9px; border-radius:9px; background:rgba(8,16,24,.75); font-size:14px; line-height:1.4; word-break:break-word; transition:opacity .8s; }
   #chatLog .m.old { opacity:0; }
   #chat.open #chatLog .m.old { opacity:.85; }
-  #chatBar { pointer-events:auto; background:rgba(8,16,24,.88); border:1px solid rgba(255,255,255,.15); border-radius:12px; padding:8px; margin-top:4px; }
-  #chatQuick { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+  #chatBar { pointer-events:auto; background:rgba(8,16,24,.6); border:1px solid rgba(255,255,255,.15); border-radius:12px; padding:5px; margin-top:2px; }
+  #chat.open #chatBar { background:rgba(8,16,24,.9); }
+  #chatQuick { display:none; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+  #chat.open #chatQuick { display:flex; }
   #chatQuick button { padding:5px 9px; font-size:14px; border-radius:999px; }
   #chatRow { display:flex; gap:6px; }
-  #chatIn { text-transform:none; letter-spacing:normal; text-align:left; padding:8px 10px; }
-  #chatRow button { padding:8px 12px; background:var(--accent); color:#1b2a10; border:none; font-weight:700; }
+  #chatIn { text-transform:none; letter-spacing:normal; text-align:left; padding:6px 10px; }
+  #chatRow button { padding:6px 12px; background:var(--accent); color:#1b2a10; border:none; font-weight:700; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <button id="pauseBtn" class="hidden">⏸ 暫停</button>
 <div id="netTag" class="hidden"></div>
-<button id="chatBtn" class="hidden">💬 聊天</button>
 <div id="chat" class="hidden">
   <div id="chatLog"></div>
-  <div id="chatBar" class="hidden">
+  <div id="chatBar">
     <div id="chatQuick"><button>👍 好球！</button><button>😂</button><button>😱 好險</button><button>🔥</button><button>再來一場！</button><button>GG</button></div>
-    <div id="chatRow"><input id="chatIn" maxlength="60" placeholder="輸入訊息，Enter 送出" autocomplete="off" enterkeyhint="send"><button id="chatSend">送出</button></div>
+    <div id="chatRow"><input id="chatIn" maxlength="60" placeholder="💬 打字聊天，Enter 送出" autocomplete="off" enterkeyhint="send"><button id="chatSend">送出</button></div>
   </div>
 </div>
 
@@ -183,7 +183,7 @@ function resize() {
   cv.style.width = W + 'px'; cv.style.height = H + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const Dn = CAMY - 14.6, Df = CAMY + 14.6;
-  const top = 56 + H * 0.1, bot = isTouch ? 160 : 44;
+  const top = 56 + H * 0.1, bot = (isTouch ? 160 : 44) + (net ? (isTouch ? 90 : 12) : 0); // 連線時下方留給聊天框
   const avail = H - top - bot;
   const fH = avail / (CAMH / Dn - (CAMH - 2.1) / Df);
   const fW = W * 0.98 / (2 * 6.6 / Dn);
@@ -476,7 +476,7 @@ function enterGameUI() {
   $('pauseBtn').classList.toggle('hidden', !!net);
   $('netTag').classList.toggle('hidden', !net);
   if (net) $('netTag').textContent = net.role === 'host' ? '🌐 連線中（主機）' : '🌐 連線中';
-  $('chatBtn').classList.toggle('hidden', !net); $('chat').classList.toggle('hidden', !net);
+  $('chat').classList.toggle('hidden', !net); resize();
   if (isTouch) touchEl.classList.remove('hidden');
 }
 function startGame() {
@@ -533,7 +533,7 @@ $('lobbyCancel').onclick = toMenu;
 function leaveNet() {
   const n = net; net = null; FLIP = false; NAMES = { P: '你', A: '電腦' }; events = []; remoteIn = { dx: 0, dy: 0 };
   if (n) { try { n.conn && n.conn.close(); } catch (e) {} try { n.peer && n.peer.destroy(); } catch (e) {} }
-  resetChat();
+  resetChat(); resize();
 }
 function netLost(text) {
   if (!net) return;
@@ -646,16 +646,22 @@ function guestSendInput(now) {
 }
 
 // ====== 聊天（連線對戰）======
-const chatEl = $('chat'), chatLog = $('chatLog'), chatIn = $('chatIn'), chatBtn = $('chatBtn');
+const chatEl = $('chat'), chatLog = $('chatLog'), chatIn = $('chatIn');
+document.body.classList.toggle('touchUI', isTouch);
 let bubbles = {}, chatAt = 0;
 const canChat = () => !!(net && net.conn && net.conn.open);
 const cleanChat = t => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+// 聊天框一直開在畫面下方：點一下（電腦也可按 Enter）就能打字，Enter 送出
 function chatOpen(on) {
   if (on && !canChat()) return;
-  chatEl.classList.toggle('open', on); $('chatBar').classList.toggle('hidden', !on);
+  chatEl.classList.toggle('open', on);
   for (const k in keys) keys[k] = false;
-  if (on) { chatBtn.classList.remove('unread'); chatIn.focus(); } else chatIn.blur();
+  if (on) chatIn.focus(); else chatIn.blur();
 }
+chatIn.addEventListener('focus', () => { if (canChat()) chatOpen(true); else chatIn.blur(); });
+chatIn.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== chatIn) chatEl.classList.remove('open'); }, 200));
+// 點快捷語／送出時不要讓輸入框先失焦
+$('chatBar').addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
 function addChat(who, text) {
   const d = document.createElement('div'); d.className = 'm';
   const n = document.createElement('b');
@@ -677,13 +683,11 @@ function recvChat(d) {
   const text = cleanChat(d.m); if (!text) return;
   addChat(opp(me()), text);
   snd(1046, 0.09, 'sine', 0.08);
-  if (!chatEl.classList.contains('open')) chatBtn.classList.add('unread');
 }
 function resetChat() {
   chatOpen(false); chatLog.textContent = ''; bubbles = {};
-  chatBtn.classList.add('hidden'); chatBtn.classList.remove('unread'); chatEl.classList.add('hidden');
+  chatEl.classList.add('hidden');
 }
-chatBtn.onclick = () => chatOpen(!chatEl.classList.contains('open'));
 $('chatSend').onclick = () => { sendChat(chatIn.value); chatOpen(false); };
 $('chatQuick').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { sendChat(b.textContent); chatOpen(false); } });
 // 頭上的對話泡泡
@@ -1547,7 +1551,7 @@ function drawHUD() {
     const t = curServer === me()
       ? (ball.tossed ? '球在最高點時再按一次！' : (isTouch ? '按「擊球」拋球發球' : '按空白鍵拋球發球') + (serveTry === 2 ? '（第二發）' : ''))
       : `${NAMES[curServer]}發球中…`;
-    ctx.fillText(t, W / 2, H - (isTouch ? 200 : 22));
+    ctx.fillText(t, W / 2, H - (isTouch ? 200 : 22) - (net ? 54 : 0)); // 連線時避開下方聊天框
   }
 }
 function drawMsg(dt) {
