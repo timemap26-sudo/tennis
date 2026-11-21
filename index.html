@@ -39,6 +39,8 @@
   #bJump { right:28px; bottom:132px; width:62px; height:62px; background:rgba(140,255,170,.3); font-size:17px; }
   #bFire { right:104px; bottom:108px; width:62px; height:62px; font-size:14px; --en:100%; background:conic-gradient(rgba(255,110,40,.75) var(--en), rgba(255,110,40,.15) 0); }
   #bFire.ready { box-shadow:0 0 14px 4px rgba(255,120,40,.7); border-color:#ffb347; }
+  #bSnake { right:182px; bottom:100px; width:58px; height:58px; font-size:13px; --en:100%; background:conic-gradient(rgba(170,90,255,.7) var(--en), rgba(170,90,255,.15) 0); }
+  #bSnake.ready { box-shadow:0 0 12px 3px rgba(180,110,255,.7); border-color:#c9a0ff; }
   #bFlip { right:202px; bottom:26px; width:58px; height:58px; background:rgba(220,140,255,.3); font-size:13px; }
   #pauseBtn { position:fixed; top:10px; right:10px; z-index:6; padding:6px 12px; font-size:14px; }
   #netTag { position:fixed; top:12px; right:12px; z-index:6; font-size:12px; padding:5px 10px; border-radius:999px; background:rgba(8,16,24,.8); }
@@ -72,7 +74,7 @@
     <div class="help" id="helpKeys">
       <kbd>←↑→↓</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
-      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>S</kbd> 跳五層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）<br>
+      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>S</kbd> 跳五層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>W</kbd> 🐍 魔球（蛇行球，用半條能量）<br>
       <kbd>P</kbd> 暫停（單機）<br>
       擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
       高吊球會在地上標出落點圈，圈縮到最小時球就落地。
@@ -112,6 +114,7 @@
   <div class="tbtn" id="bLob">高吊</div>
   <div class="tbtn" id="bFlip">後翻</div>
   <div class="tbtn" id="bFire">🔥火球</div>
+  <div class="tbtn" id="bSnake">🐍魔球</div>
   <div class="tbtn" id="bJump">跳</div>
   <div class="tbtn" id="bShot">擊球</div>
 </div>
@@ -125,6 +128,7 @@ const CAMY = 31, CAMH = 13;
 const PEER_PREFIX = 'tennis-duel-room-';
 const JG = 24, JUMP_H = 15, JV = Math.sqrt(2 * JG * JUMP_H); // 跳躍：最高 15 公尺（約五層樓）
 const FIRE_COST = 100, SPIN_G = 9;                            // 火球能量、後空翻上旋的額外下墜
+const SNAKE_COST = 50;                                         // 魔球（蛇行球）用半條能量
 const DIFFS = {
   easy:   { move: 4.6, react: 0.32, err: 0.20, spd: 16, sq: [0.45, 0.9], fire: 0.25, jump: 0.35 },
   normal: { move: 5.8, react: 0.20, err: 0.11, spd: 19, sq: [0.55, 1.0], fire: 0.40, jump: 0.65 },
@@ -189,6 +193,7 @@ const SOUNDS = {
   fire: () => { noise(0.55, 'lowpass', 700, 0.5); snd(180, 0.45, 'sawtooth', 0.1); },
   jump: () => sweep(260, 980, 0.28, 'sine', 0.18),
   flip: () => noise(0.35, 'bandpass', 2400, 0.25),
+  snake: () => { sweep(380, 1250, 0.16, 'sine', 0.14); setTimeout(() => sweep(1250, 420, 0.24, 'triangle', 0.11), 110); },
   smash: () => { snd(95, 0.35, 'square', 0.18); noise(0.3, 'lowpass', 400, 0.5); },
 };
 let cheer = 0, noiseBuf = null;
@@ -236,7 +241,7 @@ const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 
 let gt = 0;                // 遊戲時間（給電腦算跳躍時機）
 let fx = [];  // 特效粒子
 const obj = w => (w === 'P' ? P : A);
-const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, g: G };
+const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, magic: false, snake: null, g: G };
 
 function newMatch() {
   D = DIFFS[diffKey];
@@ -265,7 +270,7 @@ function setupServe() {
   rcv.x = boxSign * 2.4; rcv.y = r * 12.6;
   P.swing = 0; A.swing = 0; A.plan = null;
   for (const p of [P, A]) { p.z = 0; p.vz = 0; p.sType = 'drive'; }
-  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, g: G });
+  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, magic: false, snake: null, g: G });
   holdBall();
   phase = 'serve';
   aiServeTimer = rand(0.8, 1.3);
@@ -290,34 +295,47 @@ function launch(tx, ty, T, netErr, minClear, g = G) {
   }
   if (netErr) { const tn = -b.y / vy; if (tn > 0) vz = (0.45 - b.z + 0.5 * g * tn * tn) / tn; }
   b.vx = vx; b.vy = vy; b.vz = vz; b.g = g;
-  b.held = false; b.tossed = false; b.bounces = 0; b.netHit = false; b.fire = false;
+  b.held = false; b.tossed = false; b.bounces = 0; b.netHit = false; b.fire = false; b.magic = false; b.snake = null;
   play('hit');
 }
+// 魔球：在原本的拋物線上疊加左右蛇行擺動。擺動在出手和落地瞬間都歸零，所以落點不變
+function addSnake(b) {
+  const T = (b.vz + Math.sqrt(b.vz * b.vz + 2 * b.g * Math.max(0, b.z))) / b.g;   // 到落地的時間
+  if (!(T > 0.05)) return;
+  b.snake = { T, t: 0, off: 0, n: 3, amp: rand(1.3, 1.8) * (Math.random() < 0.5 ? -1 : 1) };
+  b.magic = true;
+}
+const snakeOff = (k, t) => k.amp * Math.sin(k.n * Math.PI * clamp(t, 0, k.T) / k.T);
 
 // aim：發球者自己視角的左右（-1/0/1）
 function serveShot(who, q, aim, type) {
   const s = sideOf(who), r = -s, second = serveTry === 2, p = obj(who);
   const fire = type === 'fire' && useFire(who);
+  const snake = type === 'snake' && useEnergy(who, SNAKE_COST, '魔球');
   if (fire) q = Math.max(q, 0.75);
+  if (snake) q = Math.max(q, 0.7);
   let tx = boxSign * 2.0 + aim * 1.45 * s, ty = r * (second ? 4.7 : 5.2);
   const spread = (1 - q) * (second ? 0.9 : 1.9);
   tx += randn() * spread; ty += randn() * spread * 0.8;
-  const spd = fire ? 34 : second ? 16 : 21 + 7 * q;
-  const netErr = Math.random() < (fire ? 0.03 : second ? 0.04 : (1 - q) * 0.3);
-  launch(tx, ty, Math.hypot(tx - ball.x, ty - ball.y) / spd, netErr, 0.08);
+  const spd = fire ? 34 : snake ? 20 : second ? 16 : 21 + 7 * q;
+  const netErr = Math.random() < (fire || snake ? 0.03 : second ? 0.04 : (1 - q) * 0.3);
+  launch(tx, ty, Math.hypot(tx - ball.x, ty - ball.y) / spd, netErr, snake ? 0.3 : 0.08);
   ball.isServe = true; ball.lastHitter = who; phase = 'rally'; ball.fire = fire;
+  if (snake) addSnake(ball);
   p.swing = 0.0001; p.hitDone = true; p.sType = 'serve';
   A.plan = null; A.react = D.react;
   if (fire) { pop('🔥 火球發球！', who); play('fire'); burst(ball.x, ball.y, ball.z, 'fire'); }
+  else if (snake) { pop('🐍 魔球發球！', who); play('snake'); burst(ball.x, ball.y, ball.z, 'magic'); }
   else if (q > 0.85) pop('完美發球！', who);
 }
 // 用掉火球能量；不夠就提示
-function useFire(who) {
+function useEnergy(who, cost, name) {
   const p = obj(who);
-  if (p.en >= FIRE_COST) { p.en -= FIRE_COST; return true; }
-  pop('火球能量不足', who);
+  if (p.en >= cost) { p.en -= cost; return true; }
+  pop(name + '能量不足', who);
   return false;
 }
+const useFire = who => useEnergy(who, FIRE_COST, '火球');
 
 // ====== 輸入 ======
 const keys = {};
@@ -331,7 +349,7 @@ function localInput() {
 const inputOf = who => (who === 'A' ? remoteIn : localInput());
 const aimOf = inp => (inp.dx > 0.35 ? 1 : inp.dx < -0.35 ? -1 : 0);
 
-const SHOTS = ['drive', 'lob', 'fire', 'flip'];
+const SHOTS = ['drive', 'lob', 'fire', 'flip', 'snake'];
 function pressShot(who, type) {
   if (mode !== 'play' || paused) return;
   if (phase === 'serve' && curServer === who) {
@@ -386,6 +404,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyA') localShot('fire');
   if (e.code === 'KeyS') localJump();
   if (e.code === 'KeyD') localShot('flip');
+  if (e.code === 'KeyW') localShot('snake');
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -408,6 +427,7 @@ joyEl.addEventListener('touchend', joyEnd); joyEl.addEventListener('touchcancel'
 document.getElementById('bShot').addEventListener('touchstart', e => { e.preventDefault(); localShot('drive'); }, { passive: false });
 document.getElementById('bLob').addEventListener('touchstart', e => { e.preventDefault(); localShot('lob'); }, { passive: false });
 document.getElementById('bFire').addEventListener('touchstart', e => { e.preventDefault(); localShot('fire'); }, { passive: false });
+document.getElementById('bSnake').addEventListener('touchstart', e => { e.preventDefault(); localShot('snake'); }, { passive: false });
 document.getElementById('bFlip').addEventListener('touchstart', e => { e.preventDefault(); localShot('flip'); }, { passive: false });
 document.getElementById('bJump').addEventListener('touchstart', e => { e.preventDefault(); localJump(); }, { passive: false });
 
@@ -454,7 +474,7 @@ $('menuBtn').onclick = toMenu;
 $('resumeBtn').onclick = togglePause;
 $('quitBtn').onclick = toMenu;
 $('pauseBtn').onclick = togglePause;
-if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「跳」跳五層樓高扣殺 · 「後翻」後空翻擊球';
+if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「🐍魔球」半條能量打出蛇行球 · 「跳」跳五層樓高扣殺 · 「後翻」後空翻擊球';
 
 // ====== 連線對戰（WebRTC / PeerJS）======
 function loadPeer() {
@@ -563,7 +583,7 @@ function snapshot() {
   return {
     t: 's', mode, ph: phase, cs: curServer, st: serveTry, mo: matchOver, tg: target, sc,
     P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType, r(P.z), Math.round(P.en)], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType, r(A.z), Math.round(A.en)],
-    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0, ball.fire ? 1 : 0],
+    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0, ball.fire ? 1 : 0, ball.magic ? 1 : 0],
     ev: events.splice(0),
   };
 }
@@ -571,7 +591,7 @@ function snapshot() {
 function onGuestData(d) {
   if (!d || d.t !== 's') return;
   for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; }
-  [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5];
+  [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5]; ball.magic = !!d.b[6];
   if (!ball.held) { ball.trail.push([ball.x, ball.y, ball.z]); if (ball.trail.length > 8) ball.trail.shift(); } else ball.trail.length = 0;
   sc = d.sc; phase = d.ph; curServer = d.cs; serveTry = d.st; target = d.tg; matchOver = d.mo;
   for (const e of d.ev || []) {
@@ -602,6 +622,7 @@ function burst(x, y, z, kind) {
   if (isHost()) { const r = v => Math.round(v * 100) / 100; events.push({ k: 'b', x: r(x), y: r(y), z: r(z), kind }); }
 }
 const FIRE_COLS = ['#fff3a0', '#ffd23f', '#ff9f1c', '#ff6b1a', '#e63946'];
+const MAGIC_COLS = ['#f1e4ff', '#c77dff', '#9d4edd', '#7bffb2', '#5ef0ff'];
 function spawnBurst(x, y, z, kind) {
   if (!isFinite(x + y + z)) return;
   if (kind === 'fire') {
@@ -609,6 +630,9 @@ function spawnBurst(x, y, z, kind) {
   } else if (kind === 'smash') {
     for (let i = 0; i < 18; i++) fx.push({ x, y, z, vx: rand(-6, 6), vy: rand(-6, 6), vz: rand(-6, 6), life: rand(0.2, 0.45), max: 0.45, col: pick(['#ffffff', '#e9ff4f', '#bde0fe']), r: rand(0.05, 0.11), glow: true, g: 0 });
     fx.push({ ring: true, x, y, z, life: 0.35, max: 0.35, col: '#ffffff' });
+  } else if (kind === 'magic') {
+    for (let i = 0; i < 22; i++) fx.push({ x, y, z, vx: rand(-4, 4), vy: rand(-4, 4), vz: rand(-2, 4), life: rand(0.3, 0.6), max: 0.6, col: pick(MAGIC_COLS), r: rand(0.05, 0.12), glow: true, g: 0 });
+    fx.push({ ring: true, x, y, z, life: 0.35, max: 0.35, col: '#c77dff' });
   } else if (kind === 'dust') {
     for (let i = 0; i < 12; i++) { const a = rand(0, TAU); fx.push({ x, y, z: 0.05, vx: Math.cos(a) * rand(1, 3), vy: Math.sin(a) * rand(1, 3), vz: rand(0.3, 1.2), life: rand(0.3, 0.6), max: 0.6, col: 'rgba(230,230,220,.7)', r: rand(0.1, 0.2), g: 3 }); }
   }
@@ -624,6 +648,10 @@ function stepFx(dt) {
   // 火球尾巴
   if (ball.fire && !ball.held && mode === 'play') {
     for (let i = 0; i < 4; i++) fx.push({ x: ball.x + rand(-0.08, 0.08), y: ball.y + rand(-0.08, 0.08), z: ball.z + rand(-0.08, 0.08), vx: rand(-0.6, 0.6), vy: rand(-0.6, 0.6), vz: rand(0.3, 1.6), life: rand(0.2, 0.45), max: 0.45, col: pick(FIRE_COLS), r: rand(0.09, 0.18), g: -1 });
+  }
+  // 魔球的閃光尾巴
+  if (ball.magic && !ball.held && mode === 'play') {
+    for (let i = 0; i < 2; i++) fx.push({ x: ball.x + rand(-0.06, 0.06), y: ball.y + rand(-0.06, 0.06), z: ball.z + rand(-0.06, 0.06), vx: rand(-0.4, 0.4), vy: rand(-0.4, 0.4), vz: rand(-0.3, 0.6), life: rand(0.3, 0.6), max: 0.6, col: pick(MAGIC_COLS), r: rand(0.04, 0.09), glow: true, g: 0 });
   }
   if (fx.length > 500) fx.splice(0, fx.length - 500);
 }
@@ -691,6 +719,11 @@ function stepBall(dt) {
   const oy = b.y;
   b.vz -= (b.bounces === 0 ? b.g : G) * dt;
   b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
+  // 魔球：落地前左右蛇行
+  if (b.snake) {
+    if (b.bounces === 0 && !b.netHit) { const k = b.snake; k.t += dt; const o = snakeOff(k, k.t); b.x += o - k.off; k.off = o; }
+    else b.snake = null;
+  }
   // 場邊圍欄
   if (Math.abs(b.y) > 18) { b.y = Math.sign(b.y) * 18; b.vy *= -0.3; b.vx *= 0.5; }
   if (Math.abs(b.x) > 10) { b.x = Math.sign(b.x) * 10; b.vx *= -0.3; b.vy *= 0.5; }
@@ -743,10 +776,12 @@ function airPoint() {
   const zt = rand(2.8, Math.min(JUMP_H, apex - 0.3));
   let x = ball.x, y = ball.y, z = ball.z, vx = ball.vx, vy = ball.vy, vz = ball.vz;
   const dt = 1 / 120;
+  const k = ball.snake;
   for (let i = 0; i < 700; i++) {
     vz -= g * dt; x += vx * dt; y += vy * dt; z += vz * dt;
     if (z <= 0) return null;
-    if (y < -2.2 && y > -14 && Math.abs(x) < 6.5 && vz < 0 && z <= zt) return { x, y, z, t: i * dt };
+    const sx = k ? x + snakeOff(k, k.t + (i + 1) * dt) - k.off : x;   // 魔球要算上蛇行的偏移
+    if (y < -2.2 && y > -14 && Math.abs(sx) < 6.5 && vz < 0 && z <= zt) return { x: sx, y, z, t: i * dt };
   }
   return null;
 }
@@ -765,11 +800,14 @@ function tryHit(who, force) {
   if (Math.abs(dx) > (flip ? 3.0 : 2.5) || Math.abs(dyr) > (flip ? 2.6 : 2.1) || rz > (flip ? 4.3 : 3.5) || rz < -1.2) return false;
   p.bh = !flip && dx * racketSide(who) < -0.15;
   const e = -dyr;               // >0 太早；<0 太晚
-  const wasFire = b.fire;
+  const wasFire = b.fire, wasMagic = b.magic;
   let q = Math.max(0, 1 - Math.abs(e) / 2.6 - (air ? 0 : p.hold * 0.45));
   if (wasFire) q *= 0.7;        // 火球很重，比較難回得好
+  if (wasMagic) q *= 0.85;      // 魔球晃來晃去，比較難抓準
   const fire = p.sType === 'fire' && useFire(who);
+  const snake = p.sType === 'snake' && useEnergy(who, SNAKE_COST, '魔球');
   if (fire) q = Math.max(q, 0.6);
+  if (snake) q = Math.max(q, 0.55);
   const inp = inputOf(who), aim = aimOf(inp);
   let ax, depth, spd, minClear, g = G, T = 0, label = '';
   if (air) {                    // 空中扣殺：越高越快
@@ -788,23 +826,27 @@ function tryHit(who, force) {
     spd = (18 + (inp.dy < -0.5 ? 4 : 0)) * (0.8 + 0.28 * q); minClear = 0.15;
   }
   if (fire) { spd = Math.max(spd, 33) + (air ? 6 : 0); minClear = Math.min(minClear, 0.12); T = 0; label = air ? '🔥 火焰扣殺！' : '🔥 火球！'; }
+  if (snake) { if (!air) spd = clamp(spd, 17, 21); minClear = Math.max(minClear, 0.3); T = 0; label = air ? '🐍 魔球扣殺！' : '🐍 魔球！'; }
   ax += randn() * (1 - q) * (air ? 0.6 : 1.4); depth += randn() * (1 - q) * (air ? 0.5 : 1.2);
   const tx = ax * s, ty = -depth * s;
-  const netErr = !air && !fire && q < 0.2 && Math.random() < 0.35;
+  const netErr = !air && !fire && !snake && q < 0.2 && Math.random() < 0.35;
   launch(tx, ty, T || Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear, g);
   b.lastHitter = who; b.isServe = false; b.fire = fire;
-  if (!fire) p.en = Math.min(FIRE_COST, p.en + 34);
+  if (snake) addSnake(b);
+  if (!fire && !snake) p.en = Math.min(FIRE_COST, p.en + 34);
   A.plan = null; A.react = D.react;
   if (fire) { play('fire'); burst(b.x, b.y, b.z, 'fire'); }
+  if (snake) { play('snake'); burst(b.x, b.y, b.z, 'magic'); }
   if (air) { play('smash'); burst(b.x, b.y, b.z, 'smash'); }
   if (label) pop(label, who);
   else if (wasFire && q > 0.45) pop('接住火球！', who);
+  else if (wasMagic && q > 0.45) pop('接住魔球！', who);
   else if (q > 0.85) pop('完美！', who); else if (q < 0.3) pop(e > 0 ? '太早了' : '太晚了', who);
   return true;
 }
 
 function aiHit(air) {
-  const b = ball, wasFire = b.fire;
+  const b = ball, wasFire = b.fire, wasMagic = b.magic;
   A.swing = 0.4; A.hitDone = true; A.sType = 'drive'; A.bh = (b.x - A.x) * racketSide('A') < -0.15;
   let tx, ty = rand(8.6, 10.6), spd = D.spd * rand(0.9, 1.12), minClear = 0.15, g = G, T = 0, lob = false, label = '';
   if (Math.random() < 0.6) tx = (P.x > 0 ? -1 : 1) * rand(1.6, 3.4); else tx = rand(-3.2, 3.2);
@@ -817,9 +859,11 @@ function aiHit(air) {
   }
   const fire = !lob && A.en >= FIRE_COST && Math.random() < D.fire;
   if (fire) { A.en -= FIRE_COST; spd = Math.max(spd, 33) + (air ? 6 : 0); minClear = 0.12; label = air ? '🔥 火焰扣殺！' : '🔥 火球！'; }
-  else A.en = Math.min(FIRE_COST, A.en + 34);
+  const snake = !fire && !lob && A.en >= SNAKE_COST && Math.random() < D.fire * 0.6;
+  if (snake) { A.en -= SNAKE_COST; if (!air) spd = clamp(spd, 17, 21); minClear = Math.max(minClear, 0.3); T = 0; label = air ? '🐍 魔球扣殺！' : '🐍 魔球！'; }
+  if (!fire && !snake) A.en = Math.min(FIRE_COST, A.en + 34);
   let netErr = false;
-  if (Math.random() < D.err * (air ? 0.5 : 1) + (wasFire ? 0.25 : 0)) {
+  if (Math.random() < D.err * (air ? 0.5 : 1) + (wasFire ? 0.25 : 0) + (wasMagic ? 0.12 : 0)) {
     const k = Math.random();
     if (k < 0.4 && !air) netErr = true;
     else if (k < 0.7) ty = rand(12.5, 14);
@@ -827,8 +871,10 @@ function aiHit(air) {
   }
   launch(tx, ty, T || Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear, g);
   b.lastHitter = 'A'; b.isServe = false; b.fire = fire;
+  if (snake) addSnake(b);
   A.plan = null;
   if (fire) { play('fire'); burst(b.x, b.y, b.z, 'fire'); }
+  if (snake) { play('snake'); burst(b.x, b.y, b.z, 'magic'); }
   if (air) { play('smash'); burst(b.x, b.y, b.z, 'smash'); }
   if (label) pop(label, 'A');
 }
@@ -914,7 +960,7 @@ function updateAI(dt) {
     if (curServer === 'A') {
       aiServeTimer -= dt;
       if (aiServeTimer <= 0 && !ball.tossed) toss();
-      if (ball.tossed && ball.vz < 0.25 && ball.z > 1.6) serveShot('A', rand(D.sq[0], D.sq[1]), [-1, 0, 1][Math.floor(Math.random() * 3)], A.en >= FIRE_COST && Math.random() < D.fire * 0.5 ? 'fire' : 'drive');
+      if (ball.tossed && ball.vz < 0.25 && ball.z > 1.6) serveShot('A', rand(D.sq[0], D.sq[1]), [-1, 0, 1][Math.floor(Math.random() * 3)], A.en >= FIRE_COST && Math.random() < D.fire * 0.5 ? 'fire' : A.en >= SNAKE_COST && Math.random() < D.fire * 0.3 ? 'snake' : 'drive');
     }
   } else if (phase === 'rally' && ball.lastHitter === 'P') {
     if (A.react > 0) { A.react -= dt; tx = A.x; ty = A.y; }
@@ -1315,7 +1361,7 @@ function drawBall() {
   }
   b.trail.forEach(([x, y, z], i) => {
     const p = P3(x, y, z);
-    circle(p[0], p[1], Math.max(1.5, (b.fire ? 0.16 : 0.08) * p[2]) * (i / b.trail.length), b.fire ? `rgba(255,${120 + i * 12},40,${0.1 * i})` : `rgba(233,255,79,${0.07 * i})`);
+    circle(p[0], p[1], Math.max(1.5, (b.fire ? 0.16 : b.magic ? 0.12 : 0.08) * p[2]) * (i / b.trail.length), b.fire ? `rgba(255,${120 + i * 12},40,${0.1 * i})` : b.magic ? `rgba(${200 - i * 12},${110 + i * 16},255,${0.1 * i})` : `rgba(233,255,79,${0.07 * i})`);
   });
   const p = P3(b.x, b.y, b.z), r = Math.max(3, 0.1 * p[2]);
   if (b.fire && !b.held) {
@@ -1324,6 +1370,11 @@ function drawBall() {
     ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(p[0], p[1], r * 5, 0, TAU); ctx.fill();
     circle(p[0], p[1], r * 1.15, '#ff7b1c'); circle(p[0], p[1], r * 0.7, '#fff4b0');
     return;
+  }
+  if (b.magic && !b.held) {
+    const gr = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 4);
+    gr.addColorStop(0, 'rgba(240,220,255,.9)'); gr.addColorStop(0.35, 'rgba(170,90,255,.55)'); gr.addColorStop(1, 'rgba(90,240,255,0)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(p[0], p[1], r * 4, 0, TAU); ctx.fill();
   }
   circle(p[0], p[1], r, '#e9ff4f');
   ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(0.7, r * 0.18);
@@ -1394,10 +1445,12 @@ function drawHUD() {
   ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(x + 28, ey + 4, bw, 7);
   const gr = ctx.createLinearGradient(x + 28, 0, x + 28 + bw, 0); gr.addColorStop(0, '#ff6b1a'); gr.addColorStop(1, '#ffd23f');
   ctx.fillStyle = gr; ctx.fillRect(x + 28, ey + 4, bw * en / FIRE_COST, 7);
+  ctx.fillStyle = en >= SNAKE_COST ? '#c77dff' : 'rgba(255,255,255,.45)'; ctx.fillRect(x + 28 + bw * SNAKE_COST / FIRE_COST - 1, ey + 2, 2, 11);   // 魔球門檻
   ctx.font = '13px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
   ctx.globalAlpha = full ? 0.6 + 0.4 * Math.sin(performance.now() / 120) : 0.6; ctx.fillText('🔥', x + 7, ey + 8); ctx.globalAlpha = 1;
-  ctx.font = '600 11px system-ui,sans-serif'; ctx.fillStyle = full ? '#ffb347' : 'rgba(255,255,255,.6)';
-  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 A 打火球！') : '火球充能中', x + 140, ey + 8);
+  const half = en >= SNAKE_COST;
+  ctx.font = '600 11px system-ui,sans-serif'; ctx.fillStyle = full ? '#ffb347' : half ? '#c9a0ff' : 'rgba(255,255,255,.6)';
+  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 A 打火球！') : half ? (isTouch ? '可用魔球' : '按 W 打魔球') : '能量充能中', x + 140, ey + 8);
   if (mode === 'play' && phase === 'serve') {
     ctx.textAlign = 'center'; ctx.font = '600 15px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.9)';
     const t = curServer === me()
@@ -1464,13 +1517,13 @@ function demo() {
   const t = performance.now() / 1000;
   P.x = Math.sin(t * 0.7) * 2; A.x = Math.sin(t * 0.9 + 1) * 2;
   P.y = 12.5; A.y = -12.5; P.swing = A.swing = 0; P.z = A.z = 0;
-  ball.held = false; ball.fire = false; ball.x = Math.sin(t * 0.6) * 2.5;
+  ball.held = false; ball.fire = false; ball.magic = false; ball.x = Math.sin(t * 0.6) * 2.5;
   const ph = (t % 2.4) / 2.4; ball.y = -11.5 + 23 * (ph < 0.5 ? ph * 2 : 2 - ph * 2);
   ball.z = 0.9 + Math.abs(Math.sin(ph * Math.PI * 2)) * 1.6; ball.trail = [];
 }
 
 let last = performance.now(), sendAcc = 0, lastEn = -1;
-const bFire = document.getElementById('bFire');
+const bFire = document.getElementById('bFire'), bSnake = document.getElementById('bSnake');
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -1496,7 +1549,7 @@ function loop(now) {
   try { render(paused ? 0 : dt); } catch (e) { console.error(e); }
   if (isTouch && sc) {
     const en = Math.round(obj(me()).en / 5) * 5;
-    if (en !== lastEn) { lastEn = en; bFire.style.setProperty('--en', en + '%'); bFire.classList.toggle('ready', en >= FIRE_COST); }
+    if (en !== lastEn) { lastEn = en; bFire.style.setProperty('--en', en + '%'); bFire.classList.toggle('ready', en >= FIRE_COST); bSnake.style.setProperty('--en', Math.min(100, en * FIRE_COST / SNAKE_COST) + '%'); bSnake.classList.toggle('ready', en >= SNAKE_COST); }
   }
 }
 requestAnimationFrame(loop);
