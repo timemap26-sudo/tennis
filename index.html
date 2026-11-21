@@ -68,8 +68,9 @@
     <div class="help" id="helpKeys">
       <kbd>←↑→↓</kbd> / <kbd>WASD</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
-      <kbd>K</kbd> 高吊球 · <kbd>P</kbd> 暫停（單機）<br>
-      擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；揮拍時機越準，球越快越穩。
+      <kbd>F</kbd> 高吊球 · <kbd>P</kbd> 暫停（單機）<br>
+      擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
+      高吊球會在地上標出落點圈，圈縮到最小時球就落地。
     </div>
   </div>
 </div>
@@ -197,10 +198,10 @@ let phase = 'dead', deadTimer = 0;
 let serveTry = 1, curServer = 'P', boxSign = -1, aiServeTimer = 0;
 let sc = null, matchOver = null;
 let msg = { main: '', sub: '', t: 0 }, pops = [];
-const P = { x: 0, y: 12.5, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, color: '#e8443a' };
-const A = { x: 0, y: -12.5, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, color: '#ffd23f', plan: null, react: 0 };
+const P = { x: 0, y: 12.5, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#e8443a' };
+const A = { x: 0, y: -12.5, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0 };
 const obj = w => (w === 'P' ? P : A);
-const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [] };
+const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null };
 
 function newMatch() {
   D = DIFFS[diffKey];
@@ -227,7 +228,7 @@ function setupServe() {
   srv.x = sx; srv.y = s * 12.3;
   rcv.x = boxSign * 2.4; rcv.y = r * 12.6;
   P.swing = 0; A.swing = 0; A.plan = null;
-  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [] });
+  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null });
   holdBall();
   phase = 'serve';
   aiServeTimer = rand(0.8, 1.3);
@@ -252,6 +253,12 @@ function launch(tx, ty, T, netErr, minClear) {
   if (netErr) { const tn = -b.y / vy; if (tn > 0) vz = (0.45 - b.z + 0.5 * G * tn * tn) / tn; }
   b.vx = vx; b.vy = vy; b.vz = vz;
   b.held = false; b.tossed = false; b.bounces = 0; b.netHit = false;
+  // 高吊球：算出落點，畫地面標記方便判斷距離
+  const apex = b.z + Math.max(0, vz) ** 2 / (2 * G);
+  if (apex > 2.8 && !netErr) {
+    const tl = (vz + Math.sqrt(vz * vz + 2 * G * b.z)) / G;
+    b.mark = [b.x + vx * tl, b.y + vy * tl, b.x, b.y];
+  } else b.mark = null;
   play('hit');
 }
 
@@ -265,7 +272,7 @@ function serveShot(who, q, aim) {
   const netErr = Math.random() < (second ? 0.04 : (1 - q) * 0.3);
   launch(tx, ty, Math.hypot(tx - ball.x, ty - ball.y) / spd, netErr, 0.08);
   ball.isServe = true; ball.lastHitter = who; phase = 'rally';
-  const p = obj(who); p.swing = 0.0001; p.hitDone = true;
+  const p = obj(who); p.swing = 0.0001; p.hitDone = true; p.sType = 'serve';
   A.plan = null; A.react = D.react;
   if (q > 0.85) pop('完美發球！', who);
 }
@@ -290,8 +297,18 @@ function pressShot(who, type) {
     return;
   }
   const p = obj(who);
-  if (p.swing === 0 || p.swing > 0.85) { p.swing = 0.0001; p.sType = type; p.hitDone = false; }
+  if (p.swing === 0 || p.swing > 0.85) { p.swing = 0.0001; p.sType = type; p.hitDone = false; p.hold = 0; p.bh = isBackhand(who); }
 }
+// 球拍那一側（世界座標 x）：兩人都是右手持拍
+const racketSide = who => (who === 'P' ? 1 : -1);
+// 預測球到達擊球點時的 x
+function contactX(who) {
+  const p = obj(who), s = sideOf(who), b = ball;
+  if (b.vy * s <= 0.5) return b.x;
+  const t = ((p.y - 0.4 * s) - b.y) / b.vy;
+  return t > 0 ? b.x + b.vx * t : b.x;
+}
+const isBackhand = who => (contactX(who) - obj(who).x) * racketSide(who) < -0.15;
 function localShot(type) {
   initAudio();
   if (isGuest()) { if (net.conn && net.conn.open) net.conn.send({ t: 'shot', type }); return; }
@@ -304,7 +321,7 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.repeat) return;
   if (e.code === 'Space' || e.code === 'KeyJ') localShot('drive');
-  if (e.code === 'KeyK' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') localShot('lob');
+  if (e.code === 'KeyF' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') localShot('lob');
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -477,15 +494,16 @@ function snapshot() {
   const r = v => Math.round(v * 1000) / 1000;
   return {
     t: 's', mode, ph: phase, cs: curServer, st: serveTry, mo: matchOver, tg: target, sc,
-    P: [r(P.x), r(P.y), r(P.swing), r(P.joy)], A: [r(A.x), r(A.y), r(A.swing), r(A.joy)],
-    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0],
+    P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType],
+    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0], mk: ball.mark ? ball.mark.map(r) : 0,
     ev: events.splice(0),
   };
 }
 // 客人收到主機的畫面狀態
 function onGuestData(d) {
   if (!d || d.t !== 's') return;
-  [P.x, P.y, P.swing, P.joy] = d.P; [A.x, A.y, A.swing, A.joy] = d.A;
+  for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; }
+  ball.mark = Array.isArray(d.mk) && d.mk.length === 4 ? d.mk : null;
   [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4];
   if (!ball.held) { ball.trail.push([ball.x, ball.y, ball.z]); if (ball.trail.length > 8) ball.trail.shift(); } else ball.trail.length = 0;
   sc = d.sc; phase = d.ph; curServer = d.cs; serveTry = d.st; target = d.tg; matchOver = d.mo;
@@ -582,7 +600,7 @@ function stepBall(dt) {
   if (!b.netHit && (oy > 0) !== (b.y > 0) && Math.abs(b.x) < POST) {
     const nh = NET + 0.156 * (b.x / POST) ** 2;
     if (b.z < nh) {
-      b.netHit = true; b.y = oy > 0 ? 0.08 : -0.08; b.vy *= -0.12; b.vx *= 0.3; b.vz = Math.min(b.vz, 0);
+      b.netHit = true; b.mark = null; b.y = oy > 0 ? 0.08 : -0.08; b.vy *= -0.12; b.vx *= 0.3; b.vz = Math.min(b.vz, 0);
       play('net');
       if (phase === 'rally') { b.isServe ? fault('掛網！') : pointTo(opp(b.lastHitter), '掛網！'); }
     }
@@ -590,6 +608,7 @@ function stepBall(dt) {
   // 彈地
   if (b.z <= 0 && b.vz < 0) {
     b.z = 0;
+    b.mark = null;
     if (b.vz < -0.8) { b.vz = -b.vz * 0.72; b.vx *= 0.8; b.vy *= 0.8; play('bounce'); if (phase === 'rally') onBounce(); }
     else { b.vz = 0; }
   }
@@ -615,15 +634,19 @@ function predict() {
 }
 
 // ====== 擊球 ======
-function tryHit(who) {
+// force：已經等太久，球在範圍內就直接打（會偏早）
+function tryHit(who, force) {
   const b = ball, p = obj(who), s = sideOf(who);
-  if (phase !== 'rally' || b.lastHitter === who || b.y * s <= 0) return false;
-  if (b.isServe && b.bounces === 0) return false;
+  if (phase !== 'rally' || b.lastHitter === who) return false;
+  const incoming = b.vy * s > 0;
+  // 球還沒過來：先停在引拍姿勢等球（提早按也打得到）
+  if (b.y * s <= 0 || (b.isServe && b.bounces === 0)) return incoming && !force ? 'wait' : false;
   const dx = b.x - p.x, dyr = (b.y - (p.y - 0.4 * s)) * s;
-  if (Math.abs(dx) > 1.9 || Math.abs(dyr) > 1.7 || b.z > 2.9) return false;
-  if (dyr < -0.2 && p.swing < 0.7) return 'wait';
+  if (dyr < -0.25 && incoming && !force) return 'wait';
+  if (Math.abs(dx) > 2.5 || Math.abs(dyr) > 2.1 || b.z > 3.5) return false;
+  p.bh = dx * racketSide(who) < -0.15;
   const e = -dyr;               // >0 太早；<0 太晚
-  const q = Math.max(0, 1 - Math.abs(e) / 1.8);
+  const q = Math.max(0, 1 - Math.abs(e) / 2.6 - p.hold * 0.45);
   const inp = inputOf(who), aim = aimOf(inp);
   let ax, depth, spd, minClear;
   if (p.sType === 'lob') { ax = aim * 2.6 - e * 1.5; depth = 10; spd = 11; minClear = 2.6; }
@@ -633,17 +656,17 @@ function tryHit(who) {
   }
   ax += randn() * (1 - q) * 1.4; depth += randn() * (1 - q) * 1.2;
   const tx = ax * s, ty = -depth * s;
-  const netErr = q < 0.3 && Math.random() < 0.45;
+  const netErr = q < 0.2 && Math.random() < 0.35;
   launch(tx, ty, Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear);
   b.lastHitter = who; b.isServe = false;
   A.plan = null; A.react = D.react;
-  if (q > 0.85) pop('完美！', who); else if (q < 0.35) pop(e > 0 ? '太早了' : '太晚了', who);
+  if (q > 0.85) pop('完美！', who); else if (q < 0.3) pop(e > 0 ? '太早了' : '太晚了', who);
   return true;
 }
 
 function aiHit() {
   const b = ball;
-  A.swing = 0.0001; A.hitDone = true;
+  A.swing = 0.4; A.hitDone = true; A.sType = 'drive'; A.bh = (b.x - A.x) * racketSide('A') < -0.15;
   let tx, ty = rand(8.6, 10.6), spd = D.spd * rand(0.9, 1.12), minClear = 0.15;
   if (Math.random() < 0.6) tx = (P.x > 0 ? -1 : 1) * rand(1.6, 3.4); else tx = rand(-3.2, 3.2);
   if (P.y < 7 && Math.random() < 0.6) { ty = rand(9.5, 10.8); spd = 11; minClear = 2.6; } // 你上網就吊高球
@@ -681,15 +704,23 @@ function movePlayer(who, inp, dt) {
     p.x = clamp(p.x + dx * k, -6.6, 6.6);
     p.y = s > 0 ? clamp(p.y + dy * k, 1.4, 14.6) : clamp(p.y + dy * k, -14.6, -1.4);
   }
+  // 輔助補位：球朝你飛來、你沒按左右時，自動往擊球點靠（讓球落在正拍那側）
+  if (phase === 'rally' && ball.lastHitter && ball.lastHitter !== who && ball.vy * s > 0.5 && Math.abs(inp.dx) < 0.3) {
+    const tx = contactX(who) - racketSide(who) * 0.6, d = tx - p.x;
+    if (Math.abs(d) > 0.12 && Math.abs(d) < 5) p.x = clamp(p.x + Math.sign(d) * Math.min(Math.abs(d), 3.4 * dt), -6.6, 6.6);
+  }
 }
+const SWING_T = 0.36, HOLD_MAX = 0.7;
 function updateSwing(who, dt) {
   const p = obj(who);
   if (p.swing <= 0) return;
-  p.swing += dt / 0.32;
-  if (!p.hitDone && p.swing >= 0.25) {
-    const r = tryHit(who);
-    if (r === true || (r !== 'wait' && p.swing >= 0.7)) p.hitDone = true;
+  if (!p.hitDone && p.swing >= 0.18) {
+    const r = tryHit(who, p.hold >= HOLD_MAX);
+    if (r === true) { p.hitDone = true; p.swing = Math.max(p.swing, 0.4); }
+    else if (r === 'wait' && p.hold < HOLD_MAX) { p.hold += dt; p.bh = isBackhand(who); return; } // 停在引拍等球
+    else if (p.swing >= 0.75) p.hitDone = true;
   }
+  p.swing += dt / SWING_T;
   if (p.swing >= 1) p.swing = 0;
 }
 
@@ -706,7 +737,7 @@ function updateAI(dt) {
     if (A.react > 0) { A.react -= dt; tx = A.x; ty = A.y; }
     else {
       if (!A.plan) A.plan = predict() || { out: true };
-      if (!A.plan.out) { tx = A.plan.x - 0.45; ty = clamp(A.plan.y - 0.4, -15.5, -1.5); }
+      if (!A.plan.out) { tx = A.plan.x + 0.45; ty = clamp(A.plan.y - 0.4, -15.5, -1.5); }
     }
     const b = ball;
     if (b.y < 0 && b.bounces === 1 && b.z < 2.6 && Math.abs(b.x - A.x) < 1.4 && Math.abs(b.y - (A.y + 0.4)) < 0.75 && !(A.plan && A.plan.out)) aiHit();
@@ -719,7 +750,7 @@ function update(dt) {
   movePlayer('P', localInput(), dt);
   updateSwing('P', dt);
   if (net) { movePlayer('A', remoteIn, dt); updateSwing('A', dt); }
-  else { updateAI(dt); if (A.swing > 0) { A.swing += dt / 0.32; if (A.swing >= 1) A.swing = 0; } }
+  else { updateAI(dt); if (A.swing > 0) { A.swing += dt / SWING_T; if (A.swing >= 1) A.swing = 0; } }
 
   // 球
   const sub = 3;
@@ -969,6 +1000,21 @@ function drawHead(cx, cy, r, L, face, expr, hand, lookX = 0) {
     if (L.style === 'pony') { ell(cx + 0.08 * r, cy + 0.85 * r, 0.24 * r, 0.42 * r, L.hair, 0.15); circle(cx + 0.03 * r, cy + 0.45 * r, 0.12 * r, L.band); }
   }
 }
+const ease = k => (k = clamp(k, 0, 1), k * k * (3 - 2 * k));
+const lerp = (a, b, k) => a + (b - a) * k;
+// 球拍角度：0 = 朝上，π/2 = 朝持拍側水平，π = 朝下
+function racketAng(p, who) {
+  const k = p.swing;
+  if (k <= 0) {
+    if (phase === 'serve' && curServer === who && ball.tossed) return lerp(1.3, -0.2, ease((ball.z - 1) / 1.4)); // 拋球時舉拍
+    return 1.3;
+  }
+  if (p.sType === 'serve') return lerp(-0.2, 2.6, ease(k));                       // 發球：由上往下揮
+  if (k < 0.2) return lerp(1.3, 2.5, ease(k / 0.2));                              // 引拍（往後下方）
+  if (k < 0.5) return lerp(2.5, 1.1, (k - 0.2) / 0.3);                            // 向前揮，約 0.4 擊球
+  if (k < 0.8) return lerp(1.1, 0.15, ease((k - 0.5) / 0.3));                     // 隨揮往上
+  return lerp(0.15, 1.3, ease((k - 0.8) / 0.2));                                  // 回到預備
+}
 function drawPlayer(p, who) {
   const L = LOOK[who], near = (who === 'P') !== FLIP;
   const [bx, by, s] = P3(p.x, p.y, 0);
@@ -1004,12 +1050,14 @@ function drawPlayer(p, who) {
   const blink = (t + (who === 'P' ? 0 : 1.7)) % 3.6 < 0.12;
   const lookX = clamp(((FLIP ? -ball.x : ball.x) - (FLIP ? -p.x : p.x)) / 3, -1, 1);
   drawHead(bx, Y(1.42), 0.38 * s, L, !near, joy ? 'joy' : blink ? 'blink' : 'normal', hand, lookX);
-  // 拿拍的手與球拍
-  const sh = [bx + 0.23 * s * hand, Y(0.94)];
-  const ang = p.swing > 0 ? -2.3 + p.swing * 3.6 : 1.3;
-  const dir = [Math.sin(ang) * hand, -Math.cos(ang)];
+  // 拿拍的手與球拍（球拍一律在身體前、擊球那一側，不會甩到頭後面）
+  const bh = p.bh && p.swing > 0 && p.sType !== 'serve', m = bh ? -1 : 1;
+  const sh = [bx + 0.23 * s * hand * (bh ? -0.25 : 1), Y(0.94)];
+  const ang = racketAng(p, who);
+  const dir = [Math.sin(ang) * hand * m, -Math.cos(ang)];
   const hx = sh[0] + dir[0] * 0.3 * s, hy = sh[1] + dir[1] * 0.3 * s;
   ctx.strokeStyle = L.skin; ctx.lineWidth = 0.1 * s; ctx.beginPath(); ctx.moveTo(sh[0], sh[1]); ctx.lineTo(hx, hy); ctx.stroke();
+  if (bh) { ctx.beginPath(); ctx.moveTo(bx - 0.2 * s * hand, Y(0.92)); ctx.lineTo(hx, hy); ctx.stroke(); } // 雙手反拍
   const rx = hx + dir[0] * 0.26 * s, ry = hy + dir[1] * 0.26 * s;
   ctx.strokeStyle = '#333'; ctx.lineWidth = 0.05 * s; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(rx, ry); ctx.stroke();
   const cx = rx + dir[0] * 0.2 * s, cy = ry + dir[1] * 0.2 * s, rot = Math.atan2(dir[1], dir[0]) + Math.PI / 2;
@@ -1041,7 +1089,12 @@ function drawUmpire() {
 }
 function drawBall() {
   const b = ball;
-  drawShadow(b.x, b.y, 0.09, 0.04, clamp(0.45 - b.z * 0.08, 0.1, 0.45));
+  drawShadow(b.x, b.y, 0.1, 0.045, clamp(0.5 - b.z * 0.06, 0.25, 0.5));
+  if (!b.held && b.z > 1.2) { // 球到影子的垂直虛線，看得出高度
+    const a = P3(b.x, b.y, 0), c = P3(b.x, b.y, b.z);
+    ctx.save(); ctx.setLineDash([3, 4]); ctx.strokeStyle = 'rgba(233,255,79,.35)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.restore();
+  }
   b.trail.forEach(([x, y, z], i) => {
     const p = P3(x, y, z); circle(p[0], p[1], Math.max(1.5, 0.08 * p[2]) * (i / b.trail.length), `rgba(233,255,79,${0.07 * i})`);
   });
@@ -1050,6 +1103,23 @@ function drawBall() {
   ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(0.7, r * 0.18);
   ctx.beginPath(); ctx.arc(p[0] - r * 0.9, p[1], r * 0.8, -0.9, 0.9); ctx.stroke();
   ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, TAU); ctx.stroke();
+}
+// 高吊球落點：地上的圈會隨球接近而縮小，圈縮到最小時球就落地
+function drawLandMark() {
+  const mk = ball.mark;
+  if (!mk || ball.held || mode !== 'play') return;
+  const [lx, ly, sx, sy] = mk;
+  const tot = Math.hypot(lx - sx, ly - sy) || 1, rem = clamp(Math.hypot(lx - ball.x, ly - ball.y) / tot, 0, 1);
+  const ringPath = r => {
+    ctx.beginPath();
+    for (let i = 0; i <= 28; i++) { const a = i / 28 * TAU, p = P3(lx + Math.cos(a) * r, ly + Math.sin(a) * r, 0); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }
+  };
+  ringPath(0.32); ctx.fillStyle = 'rgba(233,255,79,.28)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(233,255,79,.9)'; ctx.lineWidth = 2; ctx.stroke();
+  ringPath(0.32 + rem * 1.6); ctx.strokeStyle = `rgba(255,255,255,${0.35 + 0.5 * (1 - rem)})`; ctx.lineWidth = 2; ctx.stroke();
+  const c = P3(lx, ly, 0);
+  ctx.strokeStyle = 'rgba(233,255,79,.9)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(c[0] - 0.18 * c[2], c[1]); ctx.lineTo(c[0] + 0.18 * c[2], c[1]); ctx.moveTo(c[0], c[1] - 0.08 * c[2]); ctx.lineTo(c[0], c[1] + 0.08 * c[2]); ctx.stroke();
 }
 function drawHUD() {
   if (!sc || mode === 'menu') return;
@@ -1114,6 +1184,7 @@ function render(dt) {
   drawStands(t);
   drawGround();
   drawBoards();
+  drawLandMark();
   const k = FLIP ? -1 : 1;
   const items = [[A.y * k, () => drawPlayer(A, 'A')], [0, drawNet], [0, drawUmpire], [P.y * k, () => drawPlayer(P, 'P')], [ball.y * k, drawBall]];
   items.sort((a, b) => a[0] - b[0]).forEach(i => i[1]());
