@@ -59,6 +59,11 @@
   #chatRow { display:flex; gap:6px; }
   #chatIn { text-transform:none; letter-spacing:normal; text-align:left; padding:6px 10px; }
   #chatRow button { padding:6px 12px; background:var(--accent); color:#1b2a10; border:none; font-weight:700; }
+  #chatRow button.vc { padding:6px 9px; background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.25); font-weight:600; white-space:nowrap; }
+  #chatRow button.vc.on { background:#2ecc71; border-color:#7dffb0; color:#062b14; box-shadow:0 0 10px rgba(46,204,113,.6); }
+  #chatRow button.vc.off { opacity:.55; }
+  #chatRow button.vc:disabled { opacity:.4; }
+  #chatLog .m.sys { color:#bfe9ff; font-size:13px; }
 </style>
 </head>
 <body>
@@ -69,7 +74,7 @@
   <div id="chatLog"></div>
   <div id="chatBar">
     <div id="chatQuick"><button>👍 好球！</button><button>😂</button><button>😱 好險</button><button>🔥</button><button>再來一場！</button><button>GG</button></div>
-    <div id="chatRow"><input id="chatIn" maxlength="60" placeholder="💬 打字聊天，Enter 送出" autocomplete="off" enterkeyhint="send"><button id="chatSend">送出</button></div>
+    <div id="chatRow"><button id="micBtn" class="vc" title="開／關麥克風（M）">🎤 開麥</button><button id="spkBtn" class="vc" title="聽／不聽對手的聲音">🔊</button><input id="chatIn" maxlength="60" placeholder="💬 打字聊天，Enter 送出" autocomplete="off" enterkeyhint="send"><button id="chatSend">送出</button></div>
   </div>
 </div>
 
@@ -97,7 +102,7 @@
       <kbd>←↑→↓</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
       特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>W</kbd> 跳三層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>S</kbd> 🐍 魔球（蛇行球，用半條能量）· <kbd>Q</kbd> 🌀 人球合一（擊球後整個人變成球飛過去，落地再瞬移回來）<br>
-      <kbd>P</kbd> 暫停（單機）<br>
+      <kbd>P</kbd> 暫停（單機）· <kbd>M</kbd> 🎤 開關麥克風（連線對戰時和對手講話）<br>
       擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
       高吊球會在地上標出落點圈，圈縮到最小時球就落地。
     </div>
@@ -458,6 +463,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyD') localShot('flip');
   if (e.code === 'KeyS') localShot('snake');
   if (e.code === 'KeyQ') localShot('warp');
+  if (e.code === 'KeyM') toggleMic();
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -560,7 +566,7 @@ $('lobbyCancel').onclick = toMenu;
 function leaveNet() {
   const n = net; net = null; FLIP = false; NAMES = { P: '你', A: '電腦' }; events = []; remoteIn = { dx: 0, dy: 0 };
   if (n) { try { n.conn && n.conn.close(); } catch (e) {} try { n.peer && n.peer.destroy(); } catch (e) {} }
-  resetChat(); resize();
+  stopVoice(n); resetChat(); resize();
 }
 function netLost(text) {
   if (!net) return;
@@ -581,6 +587,7 @@ async function hostRoom() {
   const code = genCode();
   const peer = new Peer(PEER_PREFIX + code);
   net = { role: 'host', peer, conn: null, code };
+  peer.on('call', onCall);
   peer.on('open', () => { if (net && net.peer === peer) lobby('等待朋友加入', '把房間代碼或邀請連結傳給朋友', code); });
   peer.on('connection', c => {
     if (!net || net.peer !== peer || net.conn) { c.on('open', () => c.close()); return; }
@@ -606,6 +613,7 @@ async function joinRoom(code) {
   try { await loadPeer(); } catch (e) { lobby('連線失敗', e.message); return; }
   const peer = new Peer();
   net = { role: 'guest', peer, conn: null, code };
+  peer.on('call', onCall);
   const timer = setTimeout(() => { if (net && net.peer === peer && !net.conn) netLost('連線逾時，可能雙方網路環境不支援點對點連線，請換個網路再試。'); }, 15000);
   peer.on('open', () => {
     const c = peer.connect(PEER_PREFIX + code, { reliable: true, serialization: 'json' });
@@ -630,6 +638,7 @@ $('joinBtn').onclick = () => joinRoom($('codeIn').value);
 function onHostData(d) {
   if (!d || typeof d !== 'object') return;
   if (d.t === 'chat') recvChat(d);
+  else if (d.t === 'mic') recvMic(d);
   else if (d.t === 'i') remoteIn = { dx: clamp(+d.dx || 0, -1, 1), dy: clamp(+d.dy || 0, -1, 1) };
   else if (d.t === 'shot') pressShot('A', SHOTS.includes(d.type) ? d.type : 'drive');
   else if (d.t === 'jump') pressJump('A');
@@ -648,6 +657,7 @@ function snapshot() {
 function onGuestData(d) {
   if (!d) return;
   if (d.t === 'chat') { recvChat(d); return; }
+  if (d.t === 'mic') { recvMic(d); return; }
   if (d.t !== 's') return;
   for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; p.warp = a[8] ? (p.warp || { t: 0 }) : null; }
   [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5]; ball.magic = !!d.b[6];
@@ -689,13 +699,18 @@ chatIn.addEventListener('focus', () => { if (canChat()) chatOpen(true); else cha
 chatIn.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== chatIn) chatEl.classList.remove('open'); }, 200));
 // 點快捷語／送出時不要讓輸入框先失焦
 $('chatBar').addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
+function logChat(d) {
+  chatLog.append(d);
+  while (chatLog.children.length > 6) chatLog.firstChild.remove();
+  setTimeout(() => d.classList.add('old'), 8000);
+}
+// 系統提示（麥克風狀態等）
+function sysChat(text) { const d = document.createElement('div'); d.className = 'm sys'; d.textContent = text; logChat(d); }
 function addChat(who, text) {
   const d = document.createElement('div'); d.className = 'm';
   const n = document.createElement('b');
   n.textContent = (who === me() ? '你' : '對手') + '：'; n.style.color = who === 'P' ? '#ff6b5e' : '#ffd23f';
-  d.append(n, document.createTextNode(text)); chatLog.append(d);
-  while (chatLog.children.length > 6) chatLog.firstChild.remove();
-  setTimeout(() => d.classList.add('old'), 8000);
+  d.append(n, document.createTextNode(text)); logChat(d);
   bubbles[who] = { text: text.length > 16 ? text.slice(0, 15) + '…' : text, until: performance.now() + 4500 };
 }
 function sendChat(text) {
@@ -717,6 +732,117 @@ function resetChat() {
 }
 $('chatSend').onclick = () => { sendChat(chatIn.value); chatOpen(false); };
 $('chatQuick').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { sendChat(b.textContent); chatOpen(false); } });
+// ====== 語音（連線對戰）======
+// 每個方向各用一條 PeerJS 語音通話：開麥克風的一方打給對方，對方只接聽（不用回傳聲音）
+const micBtn = $('micBtn'), spkBtn = $('spkBtn');
+const voice = { stream: null, on: false, out: null, inCall: null, audio: null, hear: true, remoteOn: false, meA: null, themA: null, lv: { P: 0, A: 0 }, busy: false };
+function voiceUI() {
+  micBtn.classList.toggle('on', voice.on);
+  micBtn.textContent = voice.on ? '🎤 講話中' : '🎤 開麥';
+  spkBtn.textContent = voice.hear ? '🔊' : '🔇';
+  spkBtn.classList.toggle('off', !voice.hear);
+  micBtn.disabled = voice.busy;
+}
+function makeAna(stream) {
+  if (!AC) return null;
+  try {
+    const an = AC.createAnalyser(); an.fftSize = 512;
+    AC.createMediaStreamSource(stream).connect(an);   // 只用來量音量，不接到喇叭（避免回音）
+    return { an, buf: new Uint8Array(an.fftSize) };
+  } catch (e) { return null; }
+}
+function level(a) {
+  if (!a) return 0;
+  a.an.getByteTimeDomainData(a.buf);
+  let sum = 0; for (const v of a.buf) { const d = (v - 128) / 128; sum += d * d; }
+  return Math.sqrt(sum / a.buf.length);
+}
+async function toggleMic() {
+  if (!canChat() || voice.busy) return;
+  initAudio();
+  if (!voice.stream) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { sysChat('🎤 這個瀏覽器（或非 https 網址）不能使用麥克風'); return; }
+    voice.busy = true; voiceUI();
+    let st = null;
+    try { st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    catch (e) { sysChat(e && e.name === 'NotAllowedError' ? '🎤 麥克風權限被拒絕，請在網址列旁允許使用麥克風' : '🎤 找不到可以用的麥克風'); }
+    voice.busy = false; voiceUI();
+    if (!st) return;
+    if (!canChat()) { st.getTracks().forEach(t => t.stop()); return; }
+    voice.stream = st; voice.meA = makeAna(st);
+  }
+  voice.on = !voice.on;
+  voice.stream.getAudioTracks().forEach(t => { t.enabled = voice.on; });
+  if (voice.on && !voice.out) callOut();
+  try { net.conn.send({ t: 'mic', on: voice.on }); } catch (e) {}
+  voiceUI();
+  sysChat(voice.on ? '🎤 麥克風已開啟，對手聽得到你說話（M 鍵可開關）' : '🎤 麥克風已關閉');
+}
+function callOut() {
+  let c = null;
+  try { c = net.peer.call(net.conn.peer, voice.stream); } catch (e) {}
+  if (!c) { sysChat('🎤 語音連線失敗'); return; }
+  voice.out = c;
+  const drop = () => { if (voice.out === c) voice.out = null; };
+  c.on('close', drop); c.on('error', drop);
+}
+// 對手打來的語音：只接聽
+function onCall(call) {
+  if (!net || !net.conn || call.peer !== net.conn.peer) { try { call.close(); } catch (e) {} return; }
+  if (voice.inCall) { try { voice.inCall.close(); } catch (e) {} }
+  voice.inCall = call;
+  call.on('stream', playRemote);
+  call.on('close', () => { if (voice.inCall === call) voice.inCall = null; });
+  call.answer();
+}
+function playRemote(stream) {
+  initAudio();
+  if (!voice.audio) { voice.audio = document.createElement('audio'); voice.audio.autoplay = true; voice.audio.setAttribute('playsinline', ''); document.body.append(voice.audio); }
+  voice.audio.srcObject = stream; voice.audio.muted = !voice.hear;
+  voice.themA = makeAna(stream);
+  const p = voice.audio.play();
+  if (p && p.catch) p.catch(() => {
+    sysChat('🔊 點一下畫面就能聽到對手的聲音');
+    addEventListener('pointerdown', () => { initAudio(); voice.audio && voice.audio.play().catch(() => {}); }, { once: true });
+  });
+}
+function recvMic(d) {
+  voice.remoteOn = !!d.on;
+  sysChat(voice.remoteOn ? '🎤 對手開啟了麥克風' + (voice.hear ? '' : '（你目前關掉了對手的聲音）') : '🎤 對手關閉了麥克風');
+}
+function toggleHear() {
+  voice.hear = !voice.hear;
+  if (voice.audio) { voice.audio.muted = !voice.hear; if (voice.hear) voice.audio.play().catch(() => {}); }
+  voiceUI();
+}
+function stopVoice(n) {
+  if (voice.stream) voice.stream.getTracks().forEach(t => t.stop());
+  for (const c of [voice.out, voice.inCall]) if (c) { try { c.close(); } catch (e) {} }
+  if (voice.audio) { voice.audio.srcObject = null; voice.audio.remove(); }
+  Object.assign(voice, { stream: null, on: false, out: null, inCall: null, audio: null, remoteOn: false, meA: null, themA: null, lv: { P: 0, A: 0 }, busy: false });
+  voiceUI();
+}
+micBtn.onclick = toggleMic;
+spkBtn.onclick = toggleHear;
+// 頭旁邊的麥克風圖示：講話時會有聲波圈
+function drawVoice() {
+  if (!net) return;
+  const mine = me(), other = opp(mine);
+  const on = { [mine]: voice.on, [other]: voice.remoteOn };
+  const raw = { [mine]: voice.on ? level(voice.meA) : 0, [other]: voice.remoteOn && voice.hear ? level(voice.themA) : 0 };
+  for (const who of ['P', 'A']) {
+    voice.lv[who] += (raw[who] - voice.lv[who]) * 0.35;
+    if (!on[who]) continue;
+    const p = obj(who), s = P3(p.x, p.y, (p.z || 0) + 1.9), x = s[0] + 0.62 * s[2], y = s[1];
+    const lv = clamp(voice.lv[who] * 8, 0, 1), talking = lv > 0.12;
+    ctx.save();
+    if (talking) for (let i = 1; i <= 2; i++) { ctx.globalAlpha = 0.5 * lv / i; ctx.strokeStyle = '#7dffb0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 11 + i * 5 * lv + 2, 0, TAU); ctx.stroke(); }
+    ctx.globalAlpha = talking ? 1 : 0.6;
+    circle(x, y, 11, talking ? '#2ecc71' : 'rgba(8,16,24,.75)');
+    ctx.font = '12px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'; ctx.fillText('🎤', x, y + 1);
+    ctx.restore();
+  }
+}
 // 頭上的對話泡泡
 function drawBubbles() {
   const now = performance.now();
@@ -1684,6 +1810,7 @@ function render(dt) {
   const v = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.35, W / 2, H * 0.55, Math.max(W, H) * 0.8);
   v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.35)');
   ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  drawVoice();
   drawBubbles();
   drawHUD();
   drawMsg(dt);
