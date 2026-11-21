@@ -41,6 +41,7 @@
   #bFire.ready { box-shadow:0 0 14px 4px rgba(255,120,40,.7); border-color:#ffb347; }
   #bSnake { right:182px; bottom:100px; width:58px; height:58px; font-size:13px; --en:100%; background:conic-gradient(rgba(170,90,255,.7) var(--en), rgba(170,90,255,.15) 0); }
   #bSnake.ready { box-shadow:0 0 12px 3px rgba(180,110,255,.7); border-color:#c9a0ff; }
+  #bWarp { right:110px; bottom:182px; width:56px; height:56px; background:rgba(90,220,255,.32); font-size:13px; }
   #bFlip { right:202px; bottom:26px; width:58px; height:58px; background:rgba(220,140,255,.3); font-size:13px; }
   #pauseBtn { position:fixed; top:10px; right:10px; z-index:6; padding:6px 12px; font-size:14px; }
   #netTag { position:fixed; top:12px; right:12px; z-index:6; font-size:12px; padding:5px 10px; border-radius:999px; background:rgba(8,16,24,.8); }
@@ -95,7 +96,7 @@
     <div class="help" id="helpKeys">
       <kbd>←↑→↓</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
-      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>W</kbd> 跳三層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>S</kbd> 🐍 魔球（蛇行球，用半條能量）<br>
+      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>W</kbd> 跳三層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>S</kbd> 🐍 魔球（蛇行球，用半條能量）· <kbd>Q</kbd> 🌀 人球合一（擊球後整個人變成球飛過去，落地再瞬移回來）<br>
       <kbd>P</kbd> 暫停（單機）<br>
       擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
       高吊球會在地上標出落點圈，圈縮到最小時球就落地。
@@ -136,6 +137,7 @@
   <div class="tbtn" id="bFlip">後翻</div>
   <div class="tbtn" id="bFire">🔥火球</div>
   <div class="tbtn" id="bSnake">🐍魔球</div>
+  <div class="tbtn" id="bWarp">🌀變球</div>
   <div class="tbtn" id="bJump">跳</div>
   <div class="tbtn" id="bShot">擊球</div>
 </div>
@@ -215,6 +217,8 @@ const SOUNDS = {
   jump: () => sweep(260, 980, 0.28, 'sine', 0.18),
   flip: () => noise(0.35, 'bandpass', 2400, 0.25),
   snake: () => { sweep(380, 1250, 0.16, 'sine', 0.14); setTimeout(() => sweep(1250, 420, 0.24, 'triangle', 0.11), 110); },
+  warp: () => { sweep(220, 1500, 0.22, 'sine', 0.16); noise(0.25, 'highpass', 3000, 0.12); },
+  back: () => { sweep(1600, 300, 0.2, 'triangle', 0.14); snd(880, 0.12, 'sine', 0.08); },
   smash: () => { snd(95, 0.35, 'square', 0.18); noise(0.3, 'lowpass', 400, 0.5); },
 };
 let cheer = 0, noiseBuf = null;
@@ -257,8 +261,8 @@ let phase = 'dead', deadTimer = 0;
 let serveTry = 1, curServer = 'P', boxSign = -1, aiServeTimer = 0;
 let sc = null, matchOver = null;
 let msg = { main: '', sub: '', t: 0 }, pops = [];
-const P = { x: 0, y: 12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#e8443a' };
-const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0 };
+const P = { x: 0, y: 12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#e8443a', warp: null };
+const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0, warp: null };
 let gt = 0;                // 遊戲時間（給電腦算跳躍時機）
 let fx = [];  // 特效粒子
 const obj = w => (w === 'P' ? P : A);
@@ -290,7 +294,7 @@ function setupServe() {
   srv.x = sx; srv.y = s * 12.3;
   rcv.x = boxSign * 2.4; rcv.y = r * 12.6;
   P.swing = 0; A.swing = 0; A.plan = null;
-  for (const p of [P, A]) { p.z = 0; p.vz = 0; p.sType = 'drive'; }
+  for (const p of [P, A]) { p.z = 0; p.vz = 0; p.sType = 'drive'; p.warp = null; }
   Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, magic: false, snake: null, g: G });
   holdBall();
   phase = 'serve';
@@ -306,6 +310,7 @@ function toss() { ball.held = false; ball.tossed = true; ball.vx = ball.vy = 0; 
 // g：飛行中的下墜加速度（後空翻的上旋球比較大，球會急墜）
 function launch(tx, ty, T, netErr, minClear, g = G) {
   const b = ball;
+  warpBackAll();
   let vx, vy, vz;
   for (let i = 0; i < 80; i++) {
     vx = (tx - b.x) / T; vy = (ty - b.y) / T; vz = (-b.z + 0.5 * g * T * T) / T;
@@ -327,6 +332,23 @@ function addSnake(b) {
   b.magic = true;
 }
 const snakeOff = (k, t) => k.amp * Math.sin(k.n * Math.PI * clamp(t, 0, k.T) / k.T);
+// 人球合一：擊球後整個人變成球飛過去，球落地（或被打回、掛網）時再瞬移回原本的位置
+function warpOut(who) {
+  const p = obj(who);
+  burst(p.x, p.y, p.z + 1.0, 'warp'); play('warp');
+  p.warp = { x: p.x, y: p.y, t: 0 };
+  p.z = 0; p.vz = 0; p.swing = 0; p.hitDone = true; p.sType = 'drive';
+}
+function warpBack(who) {
+  const p = obj(who);
+  if (!p.warp) return;
+  burst(ball.x, ball.y, Math.max(0.3, ball.z), 'warp');
+  p.x = p.warp.x; p.y = p.warp.y; p.z = 0; p.vz = 0; p.warp = null;
+  p.lx = p.x; p.ly = p.y;
+  play('back'); burst(p.x, p.y, 1.0, 'warp');
+}
+function warpBackAll() { warpBack('P'); warpBack('A'); }
+const warper = () => (P.warp ? 'P' : A.warp ? 'A' : null);
 
 // aim：發球者自己視角的左右（-1/0/1）
 function serveShot(who, q, aim, type) {
@@ -344,9 +366,11 @@ function serveShot(who, q, aim, type) {
   ball.isServe = true; ball.lastHitter = who; phase = 'rally'; ball.fire = fire;
   if (snake) addSnake(ball);
   p.swing = 0.0001; p.hitDone = true; p.sType = 'serve';
+  if (type === 'warp') warpOut(who);
   A.plan = null; A.react = D.react;
   if (fire) { pop('🔥 火球發球！', who); play('fire'); burst(ball.x, ball.y, ball.z, 'fire'); }
   else if (snake) { pop('🐍 魔球發球！', who); play('snake'); burst(ball.x, ball.y, ball.z, 'magic'); }
+  else if (type === 'warp') pop('🌀 人球合一發球！', who);
   else if (q > 0.85) pop('完美發球！', who);
 }
 // 用掉火球能量；不夠就提示
@@ -370,9 +394,9 @@ function localInput() {
 const inputOf = who => (who === 'A' ? remoteIn : localInput());
 const aimOf = inp => (inp.dx > 0.35 ? 1 : inp.dx < -0.35 ? -1 : 0);
 
-const SHOTS = ['drive', 'lob', 'fire', 'flip', 'snake'];
+const SHOTS = ['drive', 'lob', 'fire', 'flip', 'snake', 'warp'];
 function pressShot(who, type) {
-  if (mode !== 'play' || paused) return;
+  if (mode !== 'play' || paused || obj(who).warp) return;
   if (phase === 'serve' && curServer === who) {
     if (!ball.tossed) toss();
     else if (ball.z > 1.4) serveShot(who, 1 - Math.min(1, Math.abs(ball.vz) / 4.5), aimOf(inputOf(who)), type);
@@ -389,6 +413,7 @@ function pressShot(who, type) {
 function pressJump(who) {
   if (mode !== 'play' || paused) return;
   const p = obj(who);
+  if (p.warp) return;
   if (p.z > 0.05 || p.vz > 0 || (phase === 'serve' && curServer === who)) return;
   if (p.sType === 'flip' && p.swing > 0) p.swing = 0;
   p.vz = JV; p.z = 0.01; play('jump'); burst(p.x, p.y, 0, 'dust');
@@ -432,6 +457,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyW') localJump();
   if (e.code === 'KeyD') localShot('flip');
   if (e.code === 'KeyS') localShot('snake');
+  if (e.code === 'KeyQ') localShot('warp');
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -455,6 +481,7 @@ document.getElementById('bShot').addEventListener('touchstart', e => { e.prevent
 document.getElementById('bLob').addEventListener('touchstart', e => { e.preventDefault(); localShot('lob'); }, { passive: false });
 document.getElementById('bFire').addEventListener('touchstart', e => { e.preventDefault(); localShot('fire'); }, { passive: false });
 document.getElementById('bSnake').addEventListener('touchstart', e => { e.preventDefault(); localShot('snake'); }, { passive: false });
+document.getElementById('bWarp').addEventListener('touchstart', e => { e.preventDefault(); localShot('warp'); }, { passive: false });
 document.getElementById('bFlip').addEventListener('touchstart', e => { e.preventDefault(); localShot('flip'); }, { passive: false });
 document.getElementById('bJump').addEventListener('touchstart', e => { e.preventDefault(); localJump(); }, { passive: false });
 
@@ -502,7 +529,7 @@ $('menuBtn').onclick = toMenu;
 $('resumeBtn').onclick = togglePause;
 $('quitBtn').onclick = toMenu;
 $('pauseBtn').onclick = togglePause;
-if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「🐍魔球」半條能量打出蛇行球 · 「跳」跳三層樓高扣殺 · 「後翻」後空翻擊球';
+if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「🐍魔球」半條能量打出蛇行球 · 「🌀變球」擊球後整個人變成球飛過去 · 「跳」跳三層樓高扣殺 · 「後翻」後空翻擊球';
 
 // ====== 連線對戰（WebRTC / PeerJS）======
 function loadPeer() {
@@ -612,7 +639,7 @@ function snapshot() {
   const r = v => Math.round(v * 1000) / 1000;
   return {
     t: 's', mode, ph: phase, cs: curServer, st: serveTry, mo: matchOver, tg: target, sc,
-    P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType, r(P.z), Math.round(P.en)], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType, r(A.z), Math.round(A.en)],
+    P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType, r(P.z), Math.round(P.en), P.warp ? 1 : 0], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType, r(A.z), Math.round(A.en), A.warp ? 1 : 0],
     b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0, ball.fire ? 1 : 0, ball.magic ? 1 : 0],
     ev: events.splice(0),
   };
@@ -622,7 +649,7 @@ function onGuestData(d) {
   if (!d) return;
   if (d.t === 'chat') { recvChat(d); return; }
   if (d.t !== 's') return;
-  for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; }
+  for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; p.warp = a[8] ? (p.warp || { t: 0 }) : null; }
   [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5]; ball.magic = !!d.b[6];
   if (!ball.held) { ball.trail.push([ball.x, ball.y, ball.z]); if (ball.trail.length > 8) ball.trail.shift(); } else ball.trail.length = 0;
   sc = d.sc; phase = d.ph; curServer = d.cs; serveTry = d.st; target = d.tg; matchOver = d.mo;
@@ -718,6 +745,7 @@ function burst(x, y, z, kind) {
 }
 const FIRE_COLS = ['#fff3a0', '#ffd23f', '#ff9f1c', '#ff6b1a', '#e63946'];
 const MAGIC_COLS = ['#f1e4ff', '#c77dff', '#9d4edd', '#7bffb2', '#5ef0ff'];
+const WARP_COLS = ['#ffffff', '#bdf6ff', '#5ef0ff', '#4cc9f0', '#e9ff4f'];
 function spawnBurst(x, y, z, kind) {
   if (!isFinite(x + y + z)) return;
   if (kind === 'fire') {
@@ -728,6 +756,10 @@ function spawnBurst(x, y, z, kind) {
   } else if (kind === 'magic') {
     for (let i = 0; i < 22; i++) fx.push({ x, y, z, vx: rand(-4, 4), vy: rand(-4, 4), vz: rand(-2, 4), life: rand(0.3, 0.6), max: 0.6, col: pick(MAGIC_COLS), r: rand(0.05, 0.12), glow: true, g: 0 });
     fx.push({ ring: true, x, y, z, life: 0.35, max: 0.35, col: '#c77dff' });
+  } else if (kind === 'warp') {
+    for (let i = 0; i < 26; i++) { const a = rand(0, TAU), v = rand(2, 5); fx.push({ x, y, z, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: rand(-2, 3), life: rand(0.3, 0.6), max: 0.6, col: pick(WARP_COLS), r: rand(0.06, 0.14), glow: true, g: 0 }); }
+    fx.push({ ring: true, x, y, z, life: 0.4, max: 0.4, col: '#5ef0ff' });
+    fx.push({ ring: true, x, y, z, life: 0.28, max: 0.28, col: '#ffffff' });
   } else if (kind === 'dust') {
     for (let i = 0; i < 12; i++) { const a = rand(0, TAU); fx.push({ x, y, z: 0.05, vx: Math.cos(a) * rand(1, 3), vy: Math.sin(a) * rand(1, 3), vz: rand(0.3, 1.2), life: rand(0.3, 0.6), max: 0.6, col: 'rgba(230,230,220,.7)', r: rand(0.1, 0.2), g: 3 }); }
   }
@@ -747,6 +779,12 @@ function stepFx(dt) {
   // 魔球的閃光尾巴
   if (ball.magic && !ball.held && mode === 'play') {
     for (let i = 0; i < 2; i++) fx.push({ x: ball.x + rand(-0.06, 0.06), y: ball.y + rand(-0.06, 0.06), z: ball.z + rand(-0.06, 0.06), vx: rand(-0.4, 0.4), vy: rand(-0.4, 0.4), vz: rand(-0.3, 0.6), life: rand(0.3, 0.6), max: 0.6, col: pick(MAGIC_COLS), r: rand(0.04, 0.09), glow: true, g: 0 });
+  }
+  // 人球的殘影
+  const wk = warper();
+  if (wk && !ball.held && mode === 'play') {
+    const L = LOOK[wk];
+    for (let i = 0; i < 2; i++) fx.push({ x: ball.x + rand(-0.15, 0.15), y: ball.y + rand(-0.15, 0.15), z: ball.z + rand(-0.15, 0.15), vx: rand(-0.3, 0.3), vy: rand(-0.3, 0.3), vz: rand(-0.2, 0.4), life: rand(0.25, 0.5), max: 0.5, col: pick([L.shirt, L.hair, '#5ef0ff', '#ffffff']), r: rand(0.08, 0.16), glow: true, g: 0 });
   }
   if (fx.length > 500) fx.splice(0, fx.length - 500);
 }
@@ -830,6 +868,7 @@ function stepBall(dt) {
   let fence = false;
   if (Math.abs(b.y) > 18) { b.y = Math.sign(b.y) * 18; b.vy *= -0.3; b.vx *= 0.5; fence = true; }
   if (Math.abs(b.x) > 10) { b.x = Math.sign(b.x) * 10; b.vx *= -0.3; b.vy *= 0.5; fence = true; }
+  if (fence) warpBackAll();
   if (fence && phase === 'rally') onFence();
   if (phase === 'serve') { if (b.z < 0.7 && b.vz < 0) { b.held = true; b.tossed = false; } return; }
   // 網子
@@ -837,7 +876,7 @@ function stepBall(dt) {
     const nh = NET + 0.156 * (b.x / POST) ** 2;
     if (b.z < nh) {
       b.netHit = true; b.y = oy > 0 ? 0.08 : -0.08; b.vy *= -0.12; b.vx *= 0.3; b.vz = Math.min(b.vz, 0);
-      play('net');
+      play('net'); warpBackAll();
       if (phase === 'rally') { b.isServe ? fault('掛網！') : pointTo(opp(b.lastHitter), '掛網！'); }
     }
   }
@@ -847,6 +886,7 @@ function stepBall(dt) {
     if (b.vz < -0.8) {
       const kick = b.bounces === 0 && b.g > G ? 0.95 : 0.8;   // 上旋球落地往前竄
       b.vz = Math.min(-b.vz * 0.72, 11); b.vx *= kick; b.vy *= kick; play('bounce');
+      warpBackAll();
       if (b.fire) { if (phase === 'rally' && b.bounces === 0) burst(b.x, b.y, 0, 'fire'); else b.fire = false; }
       if (phase === 'rally') onBounce();
     }
@@ -931,6 +971,8 @@ function tryHit(who, force) {
   }
   if (fire) { spd = Math.max(spd, 33) + (air ? 6 : 0); minClear = Math.min(minClear, 0.12); T = 0; label = air ? '🔥 火焰扣殺！' : '🔥 火球！'; }
   if (snake) { if (!air) spd = clamp(spd, 17, 21); minClear = Math.max(minClear, 0.3); T = 0; label = air ? '🐍 魔球扣殺！' : '🐍 魔球！'; }
+  const warp = p.sType === 'warp';
+  if (warp && !fire && !snake) { if (!air) spd = Math.max(spd, 22); minClear = Math.max(minClear, 0.25); T = 0; label = air ? '🌀 人球扣殺！' : '🌀 人球合一！'; }
   ax += randn() * (1 - q) * (air ? 0.6 : 1.4); depth += randn() * (1 - q) * (air ? 0.5 : 1.2);
   const tx = ax * s, ty = -depth * s;
   const netErr = !air && !fire && !snake && q < 0.2 && Math.random() < 0.35;
@@ -939,6 +981,7 @@ function tryHit(who, force) {
   if (snake) addSnake(b);
   if (!fire && !snake) p.en = Math.min(FIRE_COST, p.en + 34);
   A.plan = null; A.react = D.react;
+  if (warp) warpOut(who);
   if (fire) { play('fire'); burst(b.x, b.y, b.z, 'fire'); }
   if (snake) { play('snake'); burst(b.x, b.y, b.z, 'magic'); }
   if (air) { play('smash'); burst(b.x, b.y, b.z, 'smash'); }
@@ -966,6 +1009,8 @@ function aiHit(air) {
   const snake = !fire && !lob && A.en >= SNAKE_COST && Math.random() < D.fire * 0.6;
   if (snake) { A.en -= SNAKE_COST; if (!air) spd = clamp(spd, 17, 21); minClear = Math.max(minClear, 0.3); T = 0; label = air ? '🐍 魔球扣殺！' : '🐍 魔球！'; }
   if (!fire && !snake) A.en = Math.min(FIRE_COST, A.en + 34);
+  const warp = !fire && !snake && !lob && A.sType !== 'flip' && Math.random() < 0.12;
+  if (warp) { if (!air) spd = Math.max(spd, 22); minClear = Math.max(minClear, 0.25); T = 0; label = air ? '🌀 人球扣殺！' : '🌀 人球合一！'; }
   let netErr = false;
   if (Math.random() < D.err * (air ? 0.5 : 1) + (wasFire ? 0.25 : 0) + (wasMagic ? 0.12 : 0)) {
     const k = Math.random();
@@ -977,6 +1022,7 @@ function aiHit(air) {
   b.lastHitter = 'A'; b.isServe = false; b.fire = fire;
   if (snake) addSnake(b);
   A.plan = null;
+  if (warp) warpOut('A');
   if (fire) { play('fire'); burst(b.x, b.y, b.z, 'fire'); }
   if (snake) { play('snake'); burst(b.x, b.y, b.z, 'magic'); }
   if (air) { play('smash'); burst(b.x, b.y, b.z, 'smash'); }
@@ -993,6 +1039,7 @@ function moveToward(p, tx, ty, sp, dt) {
 // 依玩家自己視角的輸入移動（A 的視角是翻轉的）
 function movePlayer(who, inp, dt) {
   const p = obj(who), s = sideOf(who);
+  if (p.warp) return;              // 變成球了，不能走
   const dx = inp.dx * s, dy = inp.dy * s, m = Math.hypot(dx, dy);
   if (phase === 'serve' && curServer === who) {
     if (!ball.tossed) {
@@ -1015,7 +1062,7 @@ const SWING_T = 0.36, FLIP_T = 0.62, HOLD_MAX = 0.7;
 const swingDur = p => (p.sType === 'flip' ? FLIP_T : SWING_T);
 function updateSwing(who, dt) {
   const p = obj(who);
-  if (p.swing <= 0) return;
+  if (p.swing <= 0 || p.warp) return;
   if (!p.hitDone && p.swing >= 0.18) {
     const hm = p.z > 0.3 ? 2.5 : HOLD_MAX;   // 在空中可以等比較久
     const r = tryHit(who, p.hold >= hm);
@@ -1029,6 +1076,7 @@ function updateSwing(who, dt) {
 // 跳躍與後空翻的身體移動
 function updateBody(who, dt) {
   const p = obj(who), s = sideOf(who), b = ball;
+  if (p.warp) { p.z = 0; p.vz = 0; p.warp.t += dt; if (p.warp.t > 5) warpBack(who); return; }
   // 後空翻時往後翻一點
   if (p.sType === 'flip' && p.swing >= 0.18 && p.swing < 0.9) {
     p.y = s > 0 ? clamp(p.y + 1.3 * dt / FLIP_T, 1.4, 15.5) : clamp(p.y - 1.3 * dt / FLIP_T, -15.5, -1.4);
@@ -1089,6 +1137,7 @@ function updateAI(dt) {
       if (b.y < 0 && Math.abs(b.x - A.x) < 1.8 && Math.abs(b.y - (A.y + 0.4)) < 1.0 && Math.abs(b.z - (A.z + 1.3)) < 1.8) aiHit(true);
     } else if (b.y < 0 && b.bounces === 1 && b.z < 2.6 && Math.abs(b.x - A.x) < 1.4 && Math.abs(b.y - (A.y + 0.4)) < 0.75 && !(A.plan && A.plan.out)) aiHit(false);
   }
+  if (A.warp) return;
   moveToward(A, tx, ty, D.move, dt);
   A.y = clamp(A.y, -15.5, -1.5); A.x = clamp(A.x, -6.8, 6.8);
 }
@@ -1366,6 +1415,7 @@ function racketAng(p, who) {
   return lerp(0.15, 1.3, ease((k - 0.8) / 0.2));                                  // 回到預備
 }
 function drawPlayer(p, who) {
+  if (p.warp && mode === 'play') return;   // 人已經變成球了
   const L = LOOK[who], near = (who === 'P') !== FLIP;
   const [bx, by, s] = P3(p.x, p.y, 0);
   const t = performance.now() / 1000;
@@ -1468,6 +1518,8 @@ function drawBall() {
     circle(p[0], p[1], Math.max(1.5, (b.fire ? 0.16 : b.magic ? 0.12 : 0.08) * p[2]) * (i / b.trail.length), b.fire ? `rgba(255,${120 + i * 12},40,${0.1 * i})` : b.magic ? `rgba(${200 - i * 12},${110 + i * 16},255,${0.1 * i})` : `rgba(233,255,79,${0.07 * i})`);
   });
   const p = P3(b.x, b.y, b.z), r = Math.max(3, 0.1 * p[2]);
+  const wk = mode === 'play' && !b.held && warper();
+  if (wk) { drawPersonBall(b, wk, p); return; }
   if (b.fire && !b.held) {
     const gr = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 5);
     gr.addColorStop(0, 'rgba(255,240,160,.95)'); gr.addColorStop(0.3, 'rgba(255,140,30,.6)'); gr.addColorStop(1, 'rgba(255,60,0,0)');
@@ -1484,6 +1536,26 @@ function drawBall() {
   ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(0.7, r * 0.18);
   ctx.beginPath(); ctx.arc(p[0] - r * 0.9, p[1], r * 0.8, -0.9, 0.9); ctx.stroke();
   ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, TAU); ctx.stroke();
+}
+// 人球：整個人縮成一顆會轉的網球，臉在上面
+function drawPersonBall(b, who, p) {
+  const L = LOOK[who], t = performance.now() / 1000, R = Math.max(9, 0.55 * p[2]);
+  drawShadow(b.x, b.y, 0.4, 0.15, 0.28);
+  const gl = ctx.createRadialGradient(p[0], p[1], R * 0.6, p[0], p[1], R * 2.2);
+  gl.addColorStop(0, 'rgba(94,240,255,.45)'); gl.addColorStop(1, 'rgba(94,240,255,0)');
+  ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(p[0], p[1], R * 2.2, 0, TAU); ctx.fill();
+  const hand = (who === 'P' ? 1 : -1) * (FLIP ? -1 : 1);
+  ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(t * 14 * (b.vy > 0 !== FLIP ? -1 : 1));
+  const body = ctx.createRadialGradient(-R * 0.35, -R * 0.35, R * 0.1, 0, 0, R);
+  body.addColorStop(0, '#f6ff9a'); body.addColorStop(1, '#c6db2c');
+  ctx.fillStyle = body; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = Math.max(1.2, R * 0.1);
+  ctx.beginPath(); ctx.arc(-R * 1.25, 0, R * 0.95, -0.75, 0.75); ctx.stroke();
+  ctx.beginPath(); ctx.arc(R * 1.25, 0, R * 0.95, Math.PI - 0.75, Math.PI + 0.75); ctx.stroke();
+  ctx.fillStyle = L.shirt; ctx.beginPath(); ctx.arc(0, 0, R, 0.35 * Math.PI, 0.65 * Math.PI); ctx.lineTo(0, R * 0.55); ctx.closePath(); ctx.fill();
+  drawHead(0, -R * 0.05, R * 0.56, L, true, 'joy', hand);
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(p[0], p[1], R, 0, TAU); ctx.stroke();
 }
 function drawFx() {
   ctx.save();
