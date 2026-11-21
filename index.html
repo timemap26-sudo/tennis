@@ -36,6 +36,10 @@
   .tbtn { position:absolute; bottom:24px; border-radius:50%; pointer-events:auto; display:flex; align-items:center; justify-content:center; font-weight:700; border:2px solid rgba(255,255,255,.35); color:#fff; }
   #bShot { right:18px; width:96px; height:96px; background:rgba(233,255,79,.35); font-size:18px; }
   #bLob { right:126px; bottom:30px; width:66px; height:66px; background:rgba(120,190,255,.3); font-size:15px; }
+  #bJump { right:28px; bottom:132px; width:62px; height:62px; background:rgba(140,255,170,.3); font-size:17px; }
+  #bFire { right:104px; bottom:108px; width:62px; height:62px; font-size:14px; --en:100%; background:conic-gradient(rgba(255,110,40,.75) var(--en), rgba(255,110,40,.15) 0); }
+  #bFire.ready { box-shadow:0 0 14px 4px rgba(255,120,40,.7); border-color:#ffb347; }
+  #bFlip { right:202px; bottom:26px; width:58px; height:58px; background:rgba(220,140,255,.3); font-size:13px; }
   #pauseBtn { position:fixed; top:10px; right:10px; z-index:6; padding:6px 12px; font-size:14px; }
   #netTag { position:fixed; top:12px; right:12px; z-index:6; font-size:12px; padding:5px 10px; border-radius:999px; background:rgba(8,16,24,.8); }
 </style>
@@ -68,7 +72,8 @@
     <div class="help" id="helpKeys">
       <kbd>←↑→↓</kbd> / <kbd>WASD</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
-      <kbd>F</kbd> 高吊球 · <kbd>P</kbd> 暫停（單機）<br>
+      <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>P</kbd> 暫停（單機）<br>
+      <kbd>E</kbd> 🔥 火球（能量滿才能用）· <kbd>K</kbd> 跳五層樓高扣殺 · <kbd>L</kbd> 後空翻擊球<br>
       擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
       高吊球會在地上標出落點圈，圈縮到最小時球就落地。
     </div>
@@ -105,6 +110,9 @@
 <div id="touch" class="hidden">
   <div id="joy"><div id="knob"></div></div>
   <div class="tbtn" id="bLob">高吊</div>
+  <div class="tbtn" id="bFlip">後翻</div>
+  <div class="tbtn" id="bFire">🔥火球</div>
+  <div class="tbtn" id="bJump">跳</div>
   <div class="tbtn" id="bShot">擊球</div>
 </div>
 
@@ -115,10 +123,12 @@ const HW = 4.115, HL = 11.885, SL = 6.40, DHW = 5.485, NET = 0.914, POST = 5.03;
 const G = 9.8, TS = 0.82, BR = 0.06;
 const CAMY = 31, CAMH = 13;
 const PEER_PREFIX = 'tennis-duel-room-';
+const JG = 24, JUMP_H = 15, JV = Math.sqrt(2 * JG * JUMP_H); // 跳躍：最高 15 公尺（約五層樓）
+const FIRE_COST = 100, SPIN_G = 9;                            // 火球能量、後空翻上旋的額外下墜
 const DIFFS = {
-  easy:   { move: 4.6, react: 0.32, err: 0.20, spd: 16, sq: [0.45, 0.9] },
-  normal: { move: 5.8, react: 0.20, err: 0.11, spd: 19, sq: [0.55, 1.0] },
-  hard:   { move: 7.0, react: 0.10, err: 0.05, spd: 22, sq: [0.70, 1.0] },
+  easy:   { move: 4.6, react: 0.32, err: 0.20, spd: 16, sq: [0.45, 0.9], fire: 0.25, jump: 0.35 },
+  normal: { move: 5.8, react: 0.20, err: 0.11, spd: 19, sq: [0.55, 1.0], fire: 0.40, jump: 0.65 },
+  hard:   { move: 7.0, react: 0.10, err: 0.05, spd: 22, sq: [0.70, 1.0], fire: 0.55, jump: 0.90 },
 };
 let NAMES = { P: '你', A: '電腦' };
 const opp = w => (w === 'P' ? 'A' : 'P');
@@ -157,7 +167,8 @@ function resize() {
   HZ = top + (avail - used) / 2 - F * (CAMH - 2.1) / Df;
 }
 addEventListener('resize', resize); resize();
-function P3v(x, y, z) { const s = F / Math.max(1, CAMY - y); return [CX + x * s, HZ + (CAMH - z) * s, s]; }
+let camY = 0;               // 有人跳很高時鏡頭往上帶
+function P3v(x, y, z) { const s = F / Math.max(1, CAMY - y); return [CX + x * s, HZ + camY + (CAMH - z) * s, s]; }
 function P3(x, y, z) { return FLIP ? P3v(-x, -y, z) : P3v(x, y, z); }
 
 // ====== 音效 ======
@@ -175,15 +186,37 @@ const SOUNDS = {
   bounce: () => snd(170, 0.07, 'sine', 0.25),
   net: () => snd(110, 0.12, 'sawtooth', 0.12),
   point: () => { cheer = 1.8; applause(); snd(660, 0.15, 'triangle', 0.15); setTimeout(() => snd(880, 0.2, 'triangle', 0.15), 120); },
+  fire: () => { noise(0.55, 'lowpass', 700, 0.5); snd(180, 0.45, 'sawtooth', 0.1); },
+  jump: () => sweep(260, 980, 0.28, 'sine', 0.18),
+  flip: () => noise(0.35, 'bandpass', 2400, 0.25),
+  smash: () => { snd(95, 0.35, 'square', 0.18); noise(0.3, 'lowpass', 400, 0.5); },
 };
 let cheer = 0, noiseBuf = null;
-function applause() {
-  if (!AC) return;
+function getNoise() {
   if (!noiseBuf) {
     noiseBuf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (Math.random() < 0.03 ? 1 : 0.18);
   }
+  return noiseBuf;
+}
+function noise(dur, type, freq, vol) {
+  if (!AC) return;
+  const t = AC.currentTime, src = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  src.buffer = getNoise(); f.type = type; f.frequency.setValueAtTime(freq, t); f.frequency.exponentialRampToValueAtTime(freq * 2.5, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f).connect(g).connect(AC.destination); src.start(t); src.stop(t + dur + 0.02);
+}
+function sweep(f1, f2, d, type, vol) {
+  if (!AC) return;
+  const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + d);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g).connect(AC.destination); o.start(t); o.stop(t + d + 0.02);
+}
+function applause() {
+  if (!AC) return;
+  getNoise();
   const t = AC.currentTime, src = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
   src.buffer = noiseBuf; f.type = 'bandpass'; f.frequency.value = 1600; f.Q.value = 0.5;
   g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.12); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.9);
@@ -198,15 +231,18 @@ let phase = 'dead', deadTimer = 0;
 let serveTry = 1, curServer = 'P', boxSign = -1, aiServeTimer = 0;
 let sc = null, matchOver = null;
 let msg = { main: '', sub: '', t: 0 }, pops = [];
-const P = { x: 0, y: 12.5, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#e8443a' };
-const A = { x: 0, y: -12.5, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0 };
+const P = { x: 0, y: 12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#e8443a' };
+const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0 };
+let gt = 0;                // 遊戲時間（給電腦算跳躍時機）
+let fx = [], scorch = [];  // 特效粒子、地上的焦痕
 const obj = w => (w === 'P' ? P : A);
-const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null };
+const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null, fire: false, g: G };
 
 function newMatch() {
   D = DIFFS[diffKey];
   sc = { pts: { P: 0, A: 0 }, games: { P: 0, A: 0 }, tb: false, tbFirst: 'P', gameServer: 'P' };
   matchOver = null; serveTry = 1;
+  P.en = A.en = FIRE_COST; fx = []; scorch = [];
   mode = 'play'; paused = false;
   setupServe();
   showMsg('比賽開始！', '{P}先發球');
@@ -228,7 +264,8 @@ function setupServe() {
   srv.x = sx; srv.y = s * 12.3;
   rcv.x = boxSign * 2.4; rcv.y = r * 12.6;
   P.swing = 0; A.swing = 0; A.plan = null;
-  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null });
+  for (const p of [P, A]) { p.z = 0; p.vz = 0; p.sType = 'drive'; }
+  Object.assign(ball, { held: true, tossed: false, vx: 0, vy: 0, vz: 0, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], mark: null, fire: false, g: G });
   holdBall();
   phase = 'serve';
   aiServeTimer = rand(0.8, 1.3);
@@ -240,41 +277,52 @@ function holdBall() {
 function toss() { ball.held = false; ball.tossed = true; ball.vx = ball.vy = 0; ball.vz = 5.2; }
 
 // 以飛行時間 T 打到 (tx,ty)，自動確保過網
-function launch(tx, ty, T, netErr, minClear) {
+// g：飛行中的下墜加速度（後空翻的上旋球比較大，球會急墜）
+function launch(tx, ty, T, netErr, minClear, g = G) {
   const b = ball;
   let vx, vy, vz;
   for (let i = 0; i < 80; i++) {
-    vx = (tx - b.x) / T; vy = (ty - b.y) / T; vz = (-b.z + 0.5 * G * T * T) / T;
+    vx = (tx - b.x) / T; vy = (ty - b.y) / T; vz = (-b.z + 0.5 * g * T * T) / T;
     const tn = -b.y / vy;
     if (!(tn > 0 && tn < T)) break;
-    if (b.z + vz * tn - 0.5 * G * tn * tn >= NET + minClear) break;
+    if (b.z + vz * tn - 0.5 * g * tn * tn >= NET + minClear) break;
     T += 0.03;
   }
-  if (netErr) { const tn = -b.y / vy; if (tn > 0) vz = (0.45 - b.z + 0.5 * G * tn * tn) / tn; }
-  b.vx = vx; b.vy = vy; b.vz = vz;
-  b.held = false; b.tossed = false; b.bounces = 0; b.netHit = false;
+  if (netErr) { const tn = -b.y / vy; if (tn > 0) vz = (0.45 - b.z + 0.5 * g * tn * tn) / tn; }
+  b.vx = vx; b.vy = vy; b.vz = vz; b.g = g;
+  b.held = false; b.tossed = false; b.bounces = 0; b.netHit = false; b.fire = false;
   // 高吊球：算出落點，畫地面標記方便判斷距離
-  const apex = b.z + Math.max(0, vz) ** 2 / (2 * G);
+  const apex = b.z + Math.max(0, vz) ** 2 / (2 * g);
   if (apex > 2.8 && !netErr) {
-    const tl = (vz + Math.sqrt(vz * vz + 2 * G * b.z)) / G;
+    const tl = (vz + Math.sqrt(vz * vz + 2 * g * b.z)) / g;
     b.mark = [b.x + vx * tl, b.y + vy * tl, b.x, b.y];
   } else b.mark = null;
   play('hit');
 }
 
 // aim：發球者自己視角的左右（-1/0/1）
-function serveShot(who, q, aim) {
-  const s = sideOf(who), r = -s, second = serveTry === 2;
+function serveShot(who, q, aim, type) {
+  const s = sideOf(who), r = -s, second = serveTry === 2, p = obj(who);
+  const fire = type === 'fire' && useFire(who);
+  if (fire) q = Math.max(q, 0.75);
   let tx = boxSign * 2.0 + aim * 1.45 * s, ty = r * (second ? 4.7 : 5.2);
   const spread = (1 - q) * (second ? 0.9 : 1.9);
   tx += randn() * spread; ty += randn() * spread * 0.8;
-  const spd = second ? 16 : 21 + 7 * q;
-  const netErr = Math.random() < (second ? 0.04 : (1 - q) * 0.3);
+  const spd = fire ? 34 : second ? 16 : 21 + 7 * q;
+  const netErr = Math.random() < (fire ? 0.03 : second ? 0.04 : (1 - q) * 0.3);
   launch(tx, ty, Math.hypot(tx - ball.x, ty - ball.y) / spd, netErr, 0.08);
-  ball.isServe = true; ball.lastHitter = who; phase = 'rally';
-  const p = obj(who); p.swing = 0.0001; p.hitDone = true; p.sType = 'serve';
+  ball.isServe = true; ball.lastHitter = who; phase = 'rally'; ball.fire = fire;
+  p.swing = 0.0001; p.hitDone = true; p.sType = 'serve';
   A.plan = null; A.react = D.react;
-  if (q > 0.85) pop('完美發球！', who);
+  if (fire) { pop('🔥 火球發球！', who); play('fire'); burst(ball.x, ball.y, ball.z, 'fire'); }
+  else if (q > 0.85) pop('完美發球！', who);
+}
+// 用掉火球能量；不夠就提示
+function useFire(who) {
+  const p = obj(who);
+  if (p.en >= FIRE_COST) { p.en -= FIRE_COST; return true; }
+  pop('火球能量不足', who);
+  return false;
 }
 
 // ====== 輸入 ======
@@ -289,15 +337,28 @@ function localInput() {
 const inputOf = who => (who === 'A' ? remoteIn : localInput());
 const aimOf = inp => (inp.dx > 0.35 ? 1 : inp.dx < -0.35 ? -1 : 0);
 
+const SHOTS = ['drive', 'lob', 'fire', 'flip'];
 function pressShot(who, type) {
   if (mode !== 'play' || paused) return;
   if (phase === 'serve' && curServer === who) {
     if (!ball.tossed) toss();
-    else if (ball.z > 1.4) serveShot(who, 1 - Math.min(1, Math.abs(ball.vz) / 4.5), aimOf(inputOf(who)));
+    else if (ball.z > 1.4) serveShot(who, 1 - Math.min(1, Math.abs(ball.vz) / 4.5), aimOf(inputOf(who)), type);
     return;
   }
   const p = obj(who);
-  if (p.swing === 0 || p.swing > 0.85) { p.swing = 0.0001; p.sType = type; p.hitDone = false; p.hold = 0; p.bh = isBackhand(who); }
+  if (type === 'flip' && p.z > 0.05) type = 'drive';   // 空中不能後空翻
+  if (p.swing === 0 || p.swing > 0.85 || (p.z > 0.05 && !p.hitDone && type !== p.sType)) {
+    p.swing = 0.0001; p.sType = type; p.hitDone = false; p.hold = 0; p.bh = type !== 'flip' && isBackhand(who);
+    if (type === 'flip') play('flip');
+  }
+}
+// 跳躍：直直往上跳到 15 公尺（約五層樓），空中會自動對準來球扣殺
+function pressJump(who) {
+  if (mode !== 'play' || paused) return;
+  const p = obj(who);
+  if (p.z > 0.05 || p.vz > 0 || (phase === 'serve' && curServer === who)) return;
+  if (p.sType === 'flip' && p.swing > 0) p.swing = 0;
+  p.vz = JV; p.z = 0.01; play('jump'); burst(p.x, p.y, 0, 'dust');
 }
 // 球拍那一側（世界座標 x）：兩人都是右手持拍
 const racketSide = who => (who === 'P' ? 1 : -1);
@@ -314,6 +375,11 @@ function localShot(type) {
   if (isGuest()) { if (net.conn && net.conn.open) net.conn.send({ t: 'shot', type }); return; }
   pressShot('P', type);
 }
+function localJump() {
+  initAudio();
+  if (isGuest()) { if (net.conn && net.conn.open) net.conn.send({ t: 'jump' }); return; }
+  pressJump('P');
+}
 
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') { if (e.code === 'Enter') $('joinBtn').click(); return; }
@@ -322,6 +388,9 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.code === 'Space' || e.code === 'KeyJ') localShot('drive');
   if (e.code === 'KeyF' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') localShot('lob');
+  if (e.code === 'KeyE' || e.code === 'KeyU') localShot('fire');
+  if (e.code === 'KeyK' || e.code === 'KeyC') localJump();
+  if (e.code === 'KeyL' || e.code === 'KeyX') localShot('flip');
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -343,6 +412,9 @@ const joyEnd = e => { for (const t of e.changedTouches) if (t.identifier === joy
 joyEl.addEventListener('touchend', joyEnd); joyEl.addEventListener('touchcancel', joyEnd);
 document.getElementById('bShot').addEventListener('touchstart', e => { e.preventDefault(); localShot('drive'); }, { passive: false });
 document.getElementById('bLob').addEventListener('touchstart', e => { e.preventDefault(); localShot('lob'); }, { passive: false });
+document.getElementById('bFire').addEventListener('touchstart', e => { e.preventDefault(); localShot('fire'); }, { passive: false });
+document.getElementById('bFlip').addEventListener('touchstart', e => { e.preventDefault(); localShot('flip'); }, { passive: false });
+document.getElementById('bJump').addEventListener('touchstart', e => { e.preventDefault(); localJump(); }, { passive: false });
 
 // ====== 選單 ======
 const $ = id => document.getElementById(id);
@@ -387,7 +459,7 @@ $('menuBtn').onclick = toMenu;
 $('resumeBtn').onclick = togglePause;
 $('quitBtn').onclick = toMenu;
 $('pauseBtn').onclick = togglePause;
-if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球 · 擊球瞬間把搖桿推向左／右可控制落點';
+if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「跳」跳五層樓高扣殺 · 「後翻」後空翻擊球';
 
 // ====== 連線對戰（WebRTC / PeerJS）======
 function loadPeer() {
@@ -487,30 +559,32 @@ $('joinBtn').onclick = () => joinRoom($('codeIn').value);
 function onHostData(d) {
   if (!d || typeof d !== 'object') return;
   if (d.t === 'i') remoteIn = { dx: clamp(+d.dx || 0, -1, 1), dy: clamp(+d.dy || 0, -1, 1) };
-  else if (d.t === 'shot') pressShot('A', d.type === 'lob' ? 'lob' : 'drive');
+  else if (d.t === 'shot') pressShot('A', SHOTS.includes(d.type) ? d.type : 'drive');
+  else if (d.t === 'jump') pressJump('A');
   else if (d.t === 'again' && mode === 'over') startGame();
 }
 function snapshot() {
   const r = v => Math.round(v * 1000) / 1000;
   return {
     t: 's', mode, ph: phase, cs: curServer, st: serveTry, mo: matchOver, tg: target, sc,
-    P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType],
-    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0], mk: ball.mark ? ball.mark.map(r) : 0,
+    P: [r(P.x), r(P.y), r(P.swing), r(P.joy), P.bh ? 1 : 0, P.sType, r(P.z), Math.round(P.en)], A: [r(A.x), r(A.y), r(A.swing), r(A.joy), A.bh ? 1 : 0, A.sType, r(A.z), Math.round(A.en)],
+    b: [r(ball.x), r(ball.y), r(ball.z), ball.held ? 1 : 0, ball.tossed ? 1 : 0, ball.fire ? 1 : 0], mk: ball.mark ? ball.mark.map(r) : 0,
     ev: events.splice(0),
   };
 }
 // 客人收到主機的畫面狀態
 function onGuestData(d) {
   if (!d || d.t !== 's') return;
-  for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; }
+  for (const [p, a] of [[P, d.P], [A, d.A]]) { [p.x, p.y, p.swing, p.joy] = a; p.bh = !!a[4]; p.sType = a[5] || 'drive'; p.z = +a[6] || 0; p.en = a[7] ?? FIRE_COST; }
   ball.mark = Array.isArray(d.mk) && d.mk.length === 4 ? d.mk : null;
-  [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4];
+  [ball.x, ball.y, ball.z] = d.b; ball.held = !!d.b[3]; ball.tossed = !!d.b[4]; ball.fire = !!d.b[5];
   if (!ball.held) { ball.trail.push([ball.x, ball.y, ball.z]); if (ball.trail.length > 8) ball.trail.shift(); } else ball.trail.length = 0;
   sc = d.sc; phase = d.ph; curServer = d.cs; serveTry = d.st; target = d.tg; matchOver = d.mo;
   for (const e of d.ev || []) {
     if (e.k === 'm') showMsg(e.main, e.sub, e.t);
     else if (e.k === 'p') pop(e.text, e.who);
     else if (e.k === 's' && SOUNDS[e.n]) SOUNDS[e.n]();
+    else if (e.k === 'b') spawnBurst(e.x, e.y, e.z, e.kind);
   }
   if (d.mode === 'over' && mode !== 'over') { mode = 'over'; showOver(); }
   else if (d.mode === 'play' && mode === 'over') { mode = 'play'; enterGameUI(); }
@@ -527,7 +601,41 @@ function guestSendInput(now) {
 
 // ====== 訊息 ======
 function showMsg(main, sub = '', t = 1.7) { msg = { main, sub, t }; if (isHost()) events.push({ k: 'm', main, sub, t }); }
-function pop(text, who) { const p = obj(who); pops.push({ text, x: p.x, y: p.y, t: 1 }); if (isHost()) events.push({ k: 'p', text, who }); }
+function pop(text, who) { const p = obj(who); pops.push({ text, x: p.x, y: p.y, z: p.z || 0, t: 1 }); if (isHost()) events.push({ k: 'p', text, who }); }
+// ====== 特效 ======
+function burst(x, y, z, kind) {
+  spawnBurst(x, y, z, kind);
+  if (isHost()) { const r = v => Math.round(v * 100) / 100; events.push({ k: 'b', x: r(x), y: r(y), z: r(z), kind }); }
+}
+const FIRE_COLS = ['#fff3a0', '#ffd23f', '#ff9f1c', '#ff6b1a', '#e63946'];
+function spawnBurst(x, y, z, kind) {
+  if (!isFinite(x + y + z)) return;
+  if (kind === 'fire') {
+    for (let i = 0; i < 26; i++) fx.push({ x, y, z: z + 0.1, vx: rand(-4, 4), vy: rand(-4, 4), vz: rand(1, 6), life: rand(0.3, 0.7), max: 0.7, col: pick(FIRE_COLS), r: rand(0.08, 0.18), g: -2 });
+    if (z < 0.3) { scorch.push({ x, y, t: 6 }); if (scorch.length > 14) scorch.shift(); }
+  } else if (kind === 'smash') {
+    for (let i = 0; i < 18; i++) fx.push({ x, y, z, vx: rand(-6, 6), vy: rand(-6, 6), vz: rand(-6, 6), life: rand(0.2, 0.45), max: 0.45, col: pick(['#ffffff', '#e9ff4f', '#bde0fe']), r: rand(0.05, 0.11), glow: true, g: 0 });
+    fx.push({ ring: true, x, y, z, life: 0.35, max: 0.35, col: '#ffffff' });
+  } else if (kind === 'dust') {
+    for (let i = 0; i < 12; i++) { const a = rand(0, TAU); fx.push({ x, y, z: 0.05, vx: Math.cos(a) * rand(1, 3), vy: Math.sin(a) * rand(1, 3), vz: rand(0.3, 1.2), life: rand(0.3, 0.6), max: 0.6, col: 'rgba(230,230,220,.7)', r: rand(0.1, 0.2), g: 3 }); }
+  }
+}
+function stepFx(dt) {
+  for (const f of fx) {
+    f.life -= dt;
+    if (f.ring) continue;
+    f.x += f.vx * dt; f.y += f.vy * dt; f.z = Math.max(0, f.z + f.vz * dt); f.vz -= (f.g || 0) * dt;
+    f.vx *= 1 - 2 * dt; f.vy *= 1 - 2 * dt;
+  }
+  fx = fx.filter(f => f.life > 0);
+  for (const m of scorch) m.t -= dt;
+  scorch = scorch.filter(m => m.t > 0);
+  // 火球尾巴
+  if (ball.fire && !ball.held && mode === 'play') {
+    for (let i = 0; i < 4; i++) fx.push({ x: ball.x + rand(-0.08, 0.08), y: ball.y + rand(-0.08, 0.08), z: ball.z + rand(-0.08, 0.08), vx: rand(-0.6, 0.6), vy: rand(-0.6, 0.6), vz: rand(0.3, 1.6), life: rand(0.2, 0.45), max: 0.45, col: pick(FIRE_COLS), r: rand(0.09, 0.18), g: -1 });
+  }
+  if (fx.length > 500) fx.splice(0, fx.length - 500);
+}
 const PT = ['0', '15', '30', '40'];
 function callText() {
   if (sc.tb) return `搶七  {P} ${sc.pts.P} - ${sc.pts.A} {A}`;
@@ -590,7 +698,7 @@ function stepBall(dt) {
   const b = ball;
   if (b.held) { holdBall(); return; }
   const oy = b.y;
-  b.vz -= G * dt;
+  b.vz -= (b.bounces === 0 ? b.g : G) * dt;
   b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
   // 場邊圍欄
   if (Math.abs(b.y) > 18) { b.y = Math.sign(b.y) * 18; b.vy *= -0.3; b.vx *= 0.5; }
@@ -609,7 +717,12 @@ function stepBall(dt) {
   if (b.z <= 0 && b.vz < 0) {
     b.z = 0;
     b.mark = null;
-    if (b.vz < -0.8) { b.vz = -b.vz * 0.72; b.vx *= 0.8; b.vy *= 0.8; play('bounce'); if (phase === 'rally') onBounce(); }
+    if (b.vz < -0.8) {
+      const kick = b.bounces === 0 && b.g > G ? 0.95 : 0.8;   // 上旋球落地往前竄
+      b.vz = Math.min(-b.vz * 0.72, 11); b.vx *= kick; b.vy *= kick; play('bounce');
+      if (b.fire) { if (phase === 'rally' && b.bounces === 0) burst(b.x, b.y, 0, 'fire'); else b.fire = false; }
+      if (phase === 'rally') onBounce();
+    }
     else { b.vz = 0; }
   }
   if (b.z === 0 && b.vz === 0) { const f = Math.max(0, 1 - 2.5 * dt); b.vx *= f; b.vy *= f; }
@@ -620,15 +733,30 @@ function predict() {
   let x = ball.x, y = ball.y, z = ball.z, vx = ball.vx, vy = ball.vy, vz = ball.vz, bn = ball.bounces;
   const dt = 1 / 120;
   for (let i = 0; i < 600; i++) {
-    vz -= G * dt; x += vx * dt; y += vy * dt; z += vz * dt;
+    vz -= (bn === 0 ? ball.g : G) * dt; x += vx * dt; y += vy * dt; z += vz * dt;
     if (z <= 0 && vz < 0) {
-      z = 0; vz = -vz * 0.72; vx *= 0.8; vy *= 0.8; bn++;
+      const kick = bn === 0 && ball.g > G ? 0.95 : 0.8;
+      z = 0; vz = Math.min(-vz * 0.72, 11); vx *= kick; vy *= kick; bn++;
       if (bn === 1 && y < 0) {
         const ok = ball.isServe ? inBox(x, y) : inCourt(x, y);
         if (!ok) return { out: true };
       }
     }
     if (y < 0 && bn >= 1 && ((z < 1.3 && vz < 0) || y < -14.5)) return { x, y, t: i * dt };
+  }
+  return null;
+}
+// 電腦的跳殺點：球落地前、在電腦這側、還在高處往下掉的位置
+function airPoint() {
+  const g = ball.g, apex = ball.z + Math.max(0, ball.vz) ** 2 / (2 * g);
+  if (apex < 3.4 || ball.isServe) return null;
+  const zt = rand(2.8, Math.min(JUMP_H, apex - 0.3));
+  let x = ball.x, y = ball.y, z = ball.z, vx = ball.vx, vy = ball.vy, vz = ball.vz;
+  const dt = 1 / 120;
+  for (let i = 0; i < 700; i++) {
+    vz -= g * dt; x += vx * dt; y += vy * dt; z += vz * dt;
+    if (z <= 0) return null;
+    if (y < -2.2 && y > -14 && Math.abs(x) < 6.5 && vz < 0 && z <= zt) return { x, y, z, t: i * dt };
   }
   return null;
 }
@@ -643,43 +771,76 @@ function tryHit(who, force) {
   if (b.y * s <= 0 || (b.isServe && b.bounces === 0)) return incoming && !force ? 'wait' : false;
   const dx = b.x - p.x, dyr = (b.y - (p.y - 0.4 * s)) * s;
   if (dyr < -0.25 && incoming && !force) return 'wait';
-  if (Math.abs(dx) > 2.5 || Math.abs(dyr) > 2.1 || b.z > 3.5) return false;
-  p.bh = dx * racketSide(who) < -0.15;
+  const air = p.z > 0.8, flip = p.sType === 'flip' && !air, rz = b.z - p.z;
+  if (Math.abs(dx) > (flip ? 3.0 : 2.5) || Math.abs(dyr) > (flip ? 2.6 : 2.1) || rz > (flip ? 4.3 : 3.5) || rz < -1.2) return false;
+  p.bh = !flip && dx * racketSide(who) < -0.15;
   const e = -dyr;               // >0 太早；<0 太晚
-  const q = Math.max(0, 1 - Math.abs(e) / 2.6 - p.hold * 0.45);
+  const wasFire = b.fire;
+  let q = Math.max(0, 1 - Math.abs(e) / 2.6 - (air ? 0 : p.hold * 0.45));
+  if (wasFire) q *= 0.7;        // 火球很重，比較難回得好
+  const fire = p.sType === 'fire' && useFire(who);
+  if (fire) q = Math.max(q, 0.6);
   const inp = inputOf(who), aim = aimOf(inp);
-  let ax, depth, spd, minClear;
-  if (p.sType === 'lob') { ax = aim * 2.6 - e * 1.5; depth = 10; spd = 11; minClear = 2.6; }
-  else {
+  let ax, depth, spd, minClear, g = G, T = 0, label = '';
+  if (air) {                    // 空中扣殺：越高越快
+    ax = aim * 2.8 - e * 1.2; depth = 8.6 + randn() * 0.3;
+    spd = 30 + Math.min(10, p.z * 0.7); minClear = 0.1;
+    label = p.z > 4 ? `高空扣殺！${p.z.toFixed(0)}m` : '扣殺！';
+  } else if (p.sType === 'lob') {
+    ax = aim * 2.6 - e * 1.5; depth = 10; spd = 11; minClear = 2.6;
+    if (inp.dy > 0.5) { T = 3.5; ax = aim * 2.4; label = '沖天球！'; } // 按住 ↓：飛到十幾公尺高
+  } else if (flip) {            // 後空翻：強烈上旋，球又快又會急墜
+    ax = aim * 3.2 - e * 1.6; depth = 9.8 + randn() * 0.3;
+    spd = 25 * (0.85 + 0.25 * q); minClear = 0.55; g = G + SPIN_G;
+    label = '後空翻擊球！';
+  } else {
     ax = aim * 3.1 - e * 2.0; depth = 9.4 + randn() * 0.4;
     spd = (18 + (inp.dy < -0.5 ? 4 : 0)) * (0.8 + 0.28 * q); minClear = 0.15;
   }
-  ax += randn() * (1 - q) * 1.4; depth += randn() * (1 - q) * 1.2;
+  if (fire) { spd = Math.max(spd, 33) + (air ? 6 : 0); minClear = Math.min(minClear, 0.12); T = 0; label = air ? '🔥 火焰扣殺！' : '🔥 火球！'; }
+  ax += randn() * (1 - q) * (air ? 0.6 : 1.4); depth += randn() * (1 - q) * (air ? 0.5 : 1.2);
   const tx = ax * s, ty = -depth * s;
-  const netErr = q < 0.2 && Math.random() < 0.35;
-  launch(tx, ty, Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear);
-  b.lastHitter = who; b.isServe = false;
+  const netErr = !air && !fire && q < 0.2 && Math.random() < 0.35;
+  launch(tx, ty, T || Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear, g);
+  b.lastHitter = who; b.isServe = false; b.fire = fire;
+  if (!fire) p.en = Math.min(FIRE_COST, p.en + 34);
   A.plan = null; A.react = D.react;
-  if (q > 0.85) pop('完美！', who); else if (q < 0.3) pop(e > 0 ? '太早了' : '太晚了', who);
+  if (fire) { play('fire'); burst(b.x, b.y, b.z, 'fire'); }
+  if (air) { play('smash'); burst(b.x, b.y, b.z, 'smash'); }
+  if (label) pop(label, who);
+  else if (wasFire && q > 0.45) pop('接住火球！', who);
+  else if (q > 0.85) pop('完美！', who); else if (q < 0.3) pop(e > 0 ? '太早了' : '太晚了', who);
   return true;
 }
 
-function aiHit() {
-  const b = ball;
+function aiHit(air) {
+  const b = ball, wasFire = b.fire;
   A.swing = 0.4; A.hitDone = true; A.sType = 'drive'; A.bh = (b.x - A.x) * racketSide('A') < -0.15;
-  let tx, ty = rand(8.6, 10.6), spd = D.spd * rand(0.9, 1.12), minClear = 0.15;
+  let tx, ty = rand(8.6, 10.6), spd = D.spd * rand(0.9, 1.12), minClear = 0.15, g = G, T = 0, lob = false, label = '';
   if (Math.random() < 0.6) tx = (P.x > 0 ? -1 : 1) * rand(1.6, 3.4); else tx = rand(-3.2, 3.2);
-  if (P.y < 7 && Math.random() < 0.6) { ty = rand(9.5, 10.8); spd = 11; minClear = 2.6; } // 你上網就吊高球
+  if (air) { ty = rand(7.6, 10); spd = 30 + Math.min(10, A.z * 0.7); minClear = 0.1; label = A.z > 4 ? `高空扣殺！${A.z.toFixed(0)}m` : '扣殺！'; }
+  else if (P.y < 7 && Math.random() < 0.6) {                 // 你上網就吊高球
+    ty = rand(9.5, 10.8); spd = 11; minClear = 2.6; lob = true;
+    if (Math.random() < 0.35) { T = 3.4; label = '沖天球！'; }
+  } else if (Math.random() < 0.12) {                         // 偶爾來個後空翻
+    A.sType = 'flip'; A.swing = 0.2; A.bh = false; spd *= 1.2; minClear = 0.55; g = G + SPIN_G; label = '後空翻擊球！'; play('flip');
+  }
+  const fire = !lob && A.en >= FIRE_COST && Math.random() < D.fire;
+  if (fire) { A.en -= FIRE_COST; spd = Math.max(spd, 33) + (air ? 6 : 0); minClear = 0.12; label = air ? '🔥 火焰扣殺！' : '🔥 火球！'; }
+  else A.en = Math.min(FIRE_COST, A.en + 34);
   let netErr = false;
-  if (Math.random() < D.err) {
+  if (Math.random() < D.err * (air ? 0.5 : 1) + (wasFire ? 0.25 : 0)) {
     const k = Math.random();
-    if (k < 0.4) netErr = true;
+    if (k < 0.4 && !air) netErr = true;
     else if (k < 0.7) ty = rand(12.5, 14);
     else tx = (Math.random() < 0.5 ? -1 : 1) * rand(4.4, 5.4);
   }
-  launch(tx, ty, Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear);
-  b.lastHitter = 'A'; b.isServe = false;
+  launch(tx, ty, T || Math.hypot(tx - b.x, ty - b.y) / spd, netErr, minClear, g);
+  b.lastHitter = 'A'; b.isServe = false; b.fire = fire;
   A.plan = null;
+  if (fire) { play('fire'); burst(b.x, b.y, b.z, 'fire'); }
+  if (air) { play('smash'); burst(b.x, b.y, b.z, 'smash'); }
+  if (label) pop(label, 'A');
 }
 
 // ====== 更新 ======
@@ -710,18 +871,50 @@ function movePlayer(who, inp, dt) {
     if (Math.abs(d) > 0.12 && Math.abs(d) < 5) p.x = clamp(p.x + Math.sign(d) * Math.min(Math.abs(d), 3.4 * dt), -6.6, 6.6);
   }
 }
-const SWING_T = 0.36, HOLD_MAX = 0.7;
+const SWING_T = 0.36, FLIP_T = 0.62, HOLD_MAX = 0.7;
+const swingDur = p => (p.sType === 'flip' ? FLIP_T : SWING_T);
 function updateSwing(who, dt) {
   const p = obj(who);
   if (p.swing <= 0) return;
   if (!p.hitDone && p.swing >= 0.18) {
-    const r = tryHit(who, p.hold >= HOLD_MAX);
-    if (r === true) { p.hitDone = true; p.swing = Math.max(p.swing, 0.4); }
-    else if (r === 'wait' && p.hold < HOLD_MAX) { p.hold += dt; p.bh = isBackhand(who); return; } // 停在引拍等球
+    const hm = p.z > 0.3 ? 2.5 : HOLD_MAX;   // 在空中可以等比較久
+    const r = tryHit(who, p.hold >= hm);
+    if (r === true) { p.hitDone = true; p.swing = Math.max(p.swing, p.sType === 'flip' ? 0.2 : 0.4); }
+    else if (r === 'wait' && p.hold < hm) { p.hold += dt; p.bh = p.sType !== 'flip' && isBackhand(who); return; } // 停在引拍等球
     else if (p.swing >= 0.75) p.hitDone = true;
   }
-  p.swing += dt / SWING_T;
-  if (p.swing >= 1) p.swing = 0;
+  p.swing += dt / swingDur(p);
+  if (p.swing >= 1) { p.swing = 0; if (p.sType === 'flip') p.sType = 'drive'; }
+}
+// 跳躍與後空翻的身體移動
+function updateBody(who, dt) {
+  const p = obj(who), s = sideOf(who), b = ball;
+  // 後空翻時往後翻一點
+  if (p.sType === 'flip' && p.swing >= 0.18 && p.swing < 0.9) {
+    p.y = s > 0 ? clamp(p.y + 1.3 * dt / FLIP_T, 1.4, 15.5) : clamp(p.y - 1.3 * dt / FLIP_T, -15.5, -1.4);
+  }
+  if (p.z <= 0 && p.vz <= 0) { p.z = 0; p.vz = 0; return; }
+  // 空中輔助：球在自己這邊時往球飛過去、身體對準球的高度，並自動揮拍
+  let mag = false;
+  if (phase === 'rally' && b.lastHitter && b.lastHitter !== who && b.y * s > 0.3 && b.bounces < 2 && !(b.isServe && b.bounces === 0)) {
+    const hx = b.x - racketSide(who) * 0.5, hy = b.y + 0.4 * s;
+    const ddx = hx - p.x, ddy = hy - p.y, d = Math.hypot(ddx, ddy), m = Math.min(d, 9 * dt);
+    if (d > 0.01) {
+      p.x = clamp(p.x + ddx / d * m, -6.6, 6.6);
+      p.y = s > 0 ? clamp(p.y + ddy / d * m, 1.4, 15.5) : clamp(p.y + ddy / d * m, -15.5, -1.4);
+    }
+    const t = b.vy * s > 0.3 ? ((p.y - 0.4 * s) - b.y) / b.vy : 0;
+    if (Math.hypot(b.x - p.x, b.y - (p.y - 0.4 * s)) < 2.8 || (t > -0.05 && t < 0.5 && Math.abs(contactX(who) - p.x) < 3.2)) {
+      const tt = clamp(t, 0, 0.5), gg = b.bounces === 0 ? b.g : G;
+      const tz = clamp(b.z + b.vz * tt - 0.5 * gg * tt * tt - 1.3, 0, JUMP_H + 1);
+      p.z += (tz - p.z) * Math.min(1, dt * 12); p.vz = 0; mag = true;
+      if (p.swing === 0 && p.z > 0.5) { p.swing = 0.0001; p.sType = 'drive'; p.hitDone = false; p.hold = 0; }
+    }
+  }
+  if (!mag) {
+    p.vz -= JG * dt; p.z += p.vz * dt;
+    if (p.z <= 0) { p.z = 0; p.vz = 0; burst(p.x, p.y, 0, 'dust'); }
+  }
 }
 
 function updateAI(dt) {
@@ -731,26 +924,43 @@ function updateAI(dt) {
     if (curServer === 'A') {
       aiServeTimer -= dt;
       if (aiServeTimer <= 0 && !ball.tossed) toss();
-      if (ball.tossed && ball.vz < 0.25 && ball.z > 1.6) serveShot('A', rand(D.sq[0], D.sq[1]), [-1, 0, 1][Math.floor(Math.random() * 3)]);
+      if (ball.tossed && ball.vz < 0.25 && ball.z > 1.6) serveShot('A', rand(D.sq[0], D.sq[1]), [-1, 0, 1][Math.floor(Math.random() * 3)], A.en >= FIRE_COST && Math.random() < D.fire * 0.5 ? 'fire' : 'drive');
     }
   } else if (phase === 'rally' && ball.lastHitter === 'P') {
     if (A.react > 0) { A.react -= dt; tx = A.x; ty = A.y; }
     else {
-      if (!A.plan) A.plan = predict() || { out: true };
+      if (A.plan && A.plan.air && ball.bounces > 0) A.plan = null;
+      if (!A.plan) {
+        A.plan = predict() || { out: true };
+        // 高球：有機會直接跳起來扣殺
+        if (!A.plan.out && ball.bounces === 0 && Math.random() < D.jump) {
+          const ap = airPoint();
+          if (ap) {
+            const h = Math.max(0.2, ap.z - 1.3), tr = (JV - Math.sqrt(Math.max(0, JV * JV - 2 * JG * h))) / JG;
+            A.plan = Object.assign(ap, { air: true, jumpAt: gt + ap.t - tr - 0.05 });
+          }
+        }
+      }
       if (!A.plan.out) { tx = A.plan.x + 0.45; ty = clamp(A.plan.y - 0.4, -15.5, -1.5); }
+      if (A.plan.air && A.z === 0 && A.vz === 0 && gt >= A.plan.jumpAt) pressJump('A');
     }
     const b = ball;
-    if (b.y < 0 && b.bounces === 1 && b.z < 2.6 && Math.abs(b.x - A.x) < 1.4 && Math.abs(b.y - (A.y + 0.4)) < 0.75 && !(A.plan && A.plan.out)) aiHit();
+    if (A.z > 0.5) {
+      if (b.y < 0 && Math.abs(b.x - A.x) < 1.8 && Math.abs(b.y - (A.y + 0.4)) < 1.0 && Math.abs(b.z - (A.z + 1.3)) < 1.8) aiHit(true);
+    } else if (b.y < 0 && b.bounces === 1 && b.z < 2.6 && Math.abs(b.x - A.x) < 1.4 && Math.abs(b.y - (A.y + 0.4)) < 0.75 && !(A.plan && A.plan.out)) aiHit(false);
   }
   moveToward(A, tx, ty, D.move, dt);
   A.y = clamp(A.y, -15.5, -1.5); A.x = clamp(A.x, -6.8, 6.8);
 }
 
 function update(dt) {
+  gt += dt;
   movePlayer('P', localInput(), dt);
   updateSwing('P', dt);
   if (net) { movePlayer('A', remoteIn, dt); updateSwing('A', dt); }
-  else { updateAI(dt); if (A.swing > 0) { A.swing += dt / SWING_T; if (A.swing >= 1) A.swing = 0; } }
+  else { updateAI(dt); if (A.swing > 0) { A.swing += dt / swingDur(A); if (A.swing >= 1) { A.swing = 0; A.sType = 'drive'; } } }
+  updateBody('P', dt); updateBody('A', dt);
+  if (phase !== 'dead') for (const p of [P, A]) p.en = Math.min(FIRE_COST, p.en + 6 * dt);
 
   // 球
   const sub = 3;
@@ -1019,14 +1229,28 @@ function drawPlayer(p, who) {
   const L = LOOK[who], near = (who === 'P') !== FLIP;
   const [bx, by, s] = P3(p.x, p.y, 0);
   const t = performance.now() / 1000;
-  const run = p.run || 0, wp = p.wp || 0, joy = p.joy > 0;
-  const hop = joy ? Math.abs(Math.sin(t * 9)) * 0.28 : Math.abs(Math.sin(wp)) * 0.06 * run;
+  const run = p.run || 0, wp = p.wp || 0, joy = p.joy > 0, pz = p.z || 0, air = pz > 0.2;
+  // 後空翻：k 從 0.18 開始轉一整圈，身體同時往上彈
+  const flipping = p.sType === 'flip' && p.swing > 0;
+  const fk = flipping ? clamp((p.swing - 0.18) / 0.7, 0, 1) : 0;
+  const flipA = TAU * ease(fk), flipHop = flipping ? 1.5 * Math.sin(Math.PI * fk) : 0;
+  const crouch = flipping && fk === 0 ? 0.86 : 1;
+  const hop = (joy && !air ? Math.abs(Math.sin(t * 9)) * 0.28 : Math.abs(Math.sin(wp)) * 0.06 * run * (air ? 0 : 1)) + pz + flipHop;
   const Y = z => by - (z + hop) * s;
   const hand = (who === 'P' ? 1 : -1) * (FLIP ? -1 : 1);
-  drawShadow(p.x, p.y, 0.42 * (1 - hop), 0.15 * (1 - hop), 0.3);
+  const sh0 = 1 / (1 + hop * 0.25);
+  drawShadow(p.x, p.y, 0.42 * sh0, 0.15 * sh0, 0.3 * sh0 + 0.05);
+  drawRuler(p, who);
+  ctx.save();
+  if (flipping) {
+    const c = Math.cos(flipA), sc = (Math.abs(c) < 0.12 ? 0.12 * Math.sign(c || 1) : c) * crouch, py = Y(0.8);
+    ctx.translate(bx, py); ctx.rotate(Math.sin(flipA) * 0.25 * hand); ctx.scale(1, sc); ctx.translate(-bx, -py);
+  }
+  const showFace = flipping && Math.cos(flipA) < 0 ? near : !near; // 翻到一半看得到另一面
   ctx.lineCap = 'round';
-  // 腿與鞋
-  const lift = [Math.max(0, Math.sin(wp)) * 0.12 * run, Math.max(0, -Math.sin(wp)) * 0.12 * run];
+  // 腿與鞋（空中會縮腿）
+  const tuck = air || (flipping && fk > 0) ? 0.16 : 0;
+  const lift = [Math.max(0, Math.sin(wp)) * 0.12 * run + tuck, Math.max(0, -Math.sin(wp)) * 0.12 * run + tuck];
   [-0.12, 0.12].forEach((o, i) => {
     ctx.strokeStyle = L.skin; ctx.lineWidth = 0.13 * s;
     ctx.beginPath(); ctx.moveTo(bx + o * s, Y(0.42)); ctx.lineTo(bx + o * s, Y(0.1 + lift[i])); ctx.stroke();
@@ -1038,7 +1262,7 @@ function drawPlayer(p, who) {
   // 另一隻手
   const sh2 = [bx - 0.23 * s * hand, Y(0.92)];
   const swingT = p.swing > 0 ? p.swing : 0;
-  const oh = [bx - (0.33 + 0.08 * Math.sin(swingT * Math.PI)) * s * hand, Y(0.68 + (joy ? 0.6 : 0))];
+  const oh = [bx - (0.33 + 0.08 * Math.sin(swingT * Math.PI)) * s * hand, Y(0.68 + (joy || air ? 0.6 : 0))];
   ctx.strokeStyle = L.skin; ctx.lineWidth = 0.1 * s; ctx.beginPath(); ctx.moveTo(sh2[0], sh2[1]); ctx.lineTo(oh[0], oh[1]); ctx.stroke();
   circle(oh[0], oh[1], 0.07 * s, L.skin);
   // 身體
@@ -1049,7 +1273,7 @@ function drawPlayer(p, who) {
   // 頭
   const blink = (t + (who === 'P' ? 0 : 1.7)) % 3.6 < 0.12;
   const lookX = clamp(((FLIP ? -ball.x : ball.x) - (FLIP ? -p.x : p.x)) / 3, -1, 1);
-  drawHead(bx, Y(1.42), 0.38 * s, L, !near, joy ? 'joy' : blink ? 'blink' : 'normal', hand, lookX);
+  drawHead(bx, Y(1.42), 0.38 * s, L, showFace, joy ? 'joy' : blink ? 'blink' : 'normal', hand, lookX);
   // 拿拍的手與球拍（球拍一律在身體前、擊球那一側，不會甩到頭後面）
   const bh = p.bh && p.swing > 0 && p.sType !== 'serve', m = bh ? -1 : 1;
   const sh = [bx + 0.23 * s * hand * (bh ? -0.25 : 1), Y(0.94)];
@@ -1069,6 +1293,11 @@ function drawPlayer(p, who) {
   ctx.beginPath(); ctx.ellipse(0, 0, 0.15 * s, 0.2 * s, 0, 0, TAU); ctx.strokeStyle = L.frame; ctx.lineWidth = 0.045 * s; ctx.stroke();
   ctx.restore();
   circle(hx, hy, 0.07 * s, L.skin);
+  ctx.restore();
+  if (flipping && fk > 0 && fk < 1) { // 翻轉的弧線
+    ctx.save(); ctx.globalAlpha = 0.5 * Math.sin(Math.PI * fk); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(bx, Y(0.8), 0.55 * s, 0.95 * s, 0, -Math.PI / 2, -Math.PI / 2 + flipA * hand, hand < 0); ctx.stroke(); ctx.restore();
+  }
 }
 function drawUmpire() {
   const x = -7.0, y = 0;
@@ -1096,13 +1325,63 @@ function drawBall() {
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.restore();
   }
   b.trail.forEach(([x, y, z], i) => {
-    const p = P3(x, y, z); circle(p[0], p[1], Math.max(1.5, 0.08 * p[2]) * (i / b.trail.length), `rgba(233,255,79,${0.07 * i})`);
+    const p = P3(x, y, z);
+    circle(p[0], p[1], Math.max(1.5, (b.fire ? 0.16 : 0.08) * p[2]) * (i / b.trail.length), b.fire ? `rgba(255,${120 + i * 12},40,${0.1 * i})` : `rgba(233,255,79,${0.07 * i})`);
   });
   const p = P3(b.x, b.y, b.z), r = Math.max(3, 0.1 * p[2]);
+  if (b.fire && !b.held) {
+    const gr = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 5);
+    gr.addColorStop(0, 'rgba(255,240,160,.95)'); gr.addColorStop(0.3, 'rgba(255,140,30,.6)'); gr.addColorStop(1, 'rgba(255,60,0,0)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(p[0], p[1], r * 5, 0, TAU); ctx.fill();
+    circle(p[0], p[1], r * 1.15, '#ff7b1c'); circle(p[0], p[1], r * 0.7, '#fff4b0');
+    return;
+  }
   circle(p[0], p[1], r, '#e9ff4f');
   ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(0.7, r * 0.18);
   ctx.beginPath(); ctx.arc(p[0] - r * 0.9, p[1], r * 0.8, -0.9, 0.9); ctx.stroke();
   ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, TAU); ctx.stroke();
+}
+function drawScorch() {
+  for (const m of scorch) {
+    const p = P3(m.x, m.y, 0), a = Math.min(1, m.t / 2) * 0.55;
+    ell(p[0], p[1], 0.55 * p[2], 0.22 * p[2], `rgba(30,15,5,${a})`);
+    ell(p[0], p[1], 0.3 * p[2], 0.12 * p[2], `rgba(255,90,20,${a * Math.min(1, m.t / 5)})`);
+  }
+}
+function drawFx() {
+  ctx.save();
+  for (const f of fx) {
+    const k = clamp(f.life / f.max, 0, 1), p = P3(f.x, f.y, f.z);
+    if (f.ring) {
+      ctx.globalAlpha = k; ctx.strokeStyle = f.col; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(p[0], p[1], (1 - k) * 2.2 * p[2] + 4, 0, TAU); ctx.stroke();
+      continue;
+    }
+    ctx.globalCompositeOperation = f.glow ? 'lighter' : 'source-over';
+    ctx.globalAlpha = k;
+    circle(p[0], p[1], Math.max(1, f.r * p[2] * (0.5 + k * 0.5)), f.col);
+  }
+  ctx.restore();
+}
+// 跳很高時旁邊畫出樓層刻度（每層約 3 公尺）
+function drawRuler(p, who) {
+  if (p.z < 1.5) return;
+  const a = Math.min(1, (p.z - 1.5) / 3) * 0.85, x = p.x - racketSide(who) * 1.3;
+  ctx.save(); ctx.globalAlpha = a;
+  const b0 = P3(x, p.y, 0), b1 = P3(x, p.y, JUMP_H);
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
+  ctx.beginPath(); ctx.moveTo(b0[0], b0[1]); ctx.lineTo(b1[0], b1[1]); ctx.stroke(); ctx.setLineDash([]);
+  ctx.font = '700 12px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  for (let f = 1; f <= 5; f++) {
+    const q = P3(x, p.y, f * 3);
+    ctx.fillStyle = p.z >= f * 3 - 0.3 ? '#e9ff4f' : 'rgba(255,255,255,.7)';
+    ctx.fillRect(q[0] - 6, q[1] - 1, 12, 2); ctx.fillText(f + 'F', q[0] + 9, q[1]);
+  }
+  const h = P3(p.x, p.y, p.z + 2.2);
+  ctx.textAlign = 'center'; ctx.font = '800 15px system-ui,sans-serif'; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.6)';
+  const t = p.z.toFixed(1) + ' m';
+  ctx.strokeText(t, h[0], h[1]); ctx.fillStyle = '#fff'; ctx.fillText(t, h[0], h[1]);
+  ctx.restore();
 }
 // 高吊球落點：地上的圈會隨球接近而縮小，圈縮到最小時球就落地
 function drawLandMark() {
@@ -1143,12 +1422,23 @@ function drawHUD() {
   row(opp(me()), y + 6 + rh / 2); row(me(), y + 6 + rh * 1.5);
   ctx.font = '11px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.textAlign = 'left';
   ctx.fillText(sc.tb ? '搶七' : `搶 ${target} 局`, x + 4, y + rh * 2 + 24);
+  // 火球能量
+  const en = obj(me()).en, full = en >= FIRE_COST, ey = y + rh * 2 + 36;
+  const bw = 104;
+  ctx.fillStyle = 'rgba(8,16,24,.82)'; ctx.beginPath(); ctx.roundRect(x, ey - 2, w, 20, 8); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(x + 28, ey + 4, bw, 7);
+  const gr = ctx.createLinearGradient(x + 28, 0, x + 28 + bw, 0); gr.addColorStop(0, '#ff6b1a'); gr.addColorStop(1, '#ffd23f');
+  ctx.fillStyle = gr; ctx.fillRect(x + 28, ey + 4, bw * en / FIRE_COST, 7);
+  ctx.font = '13px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+  ctx.globalAlpha = full ? 0.6 + 0.4 * Math.sin(performance.now() / 120) : 0.6; ctx.fillText('🔥', x + 7, ey + 8); ctx.globalAlpha = 1;
+  ctx.font = '600 11px system-ui,sans-serif'; ctx.fillStyle = full ? '#ffb347' : 'rgba(255,255,255,.6)';
+  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 E 打火球！') : '火球充能中', x + 140, ey + 8);
   if (mode === 'play' && phase === 'serve') {
     ctx.textAlign = 'center'; ctx.font = '600 15px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.9)';
     const t = curServer === me()
       ? (ball.tossed ? '球在最高點時再按一次！' : (isTouch ? '按「擊球」拋球發球' : '按空白鍵拋球發球') + (serveTry === 2 ? '（第二發）' : ''))
       : `${NAMES[curServer]}發球中…`;
-    ctx.fillText(t, W / 2, H - (isTouch ? 170 : 22));
+    ctx.fillText(t, W / 2, H - (isTouch ? 200 : 22));
   }
 }
 function drawMsg(dt) {
@@ -1168,15 +1458,24 @@ function drawMsg(dt) {
   }
   pops = pops.filter(p => (p.t -= dt) > 0);
   for (const p of pops) {
-    const s = P3(p.x, p.y, 2.3 + (1 - p.t) * 0.8);
+    const s = P3(p.x, p.y, (p.z || 0) + 2.3 + (1 - p.t) * 0.8);
     ctx.globalAlpha = Math.min(1, p.t * 2); ctx.font = '700 16px system-ui,sans-serif'; ctx.textAlign = 'center';
     ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.strokeText(p.text, s[0], s[1]);
     ctx.fillStyle = '#e9ff4f'; ctx.fillText(p.text, s[0], s[1]);
     ctx.globalAlpha = 1;
   }
 }
+function updateCam(dt) {
+  let need = 0;
+  const raw = (x, y, z) => P3(x, y, z)[1] - camY;
+  for (const p of [P, A]) if (p.z > 0.5) need = Math.max(need, 70 - raw(p.x, p.y, p.z + 2.4));
+  if (mode === 'play' && !ball.held && ball.z > 4) need = Math.max(need, 50 - raw(ball.x, ball.y, ball.z));
+  camY += (Math.min(need, H * 1.5) - camY) * Math.min(1, dt * 6);
+  if (mode === 'menu') camY = 0;
+}
 function render(dt) {
   const t = performance.now() / 1000;
+  updateCam(dt);
   const g = ctx.createLinearGradient(0, 0, 0, H * 0.5);
   g.addColorStop(0, '#0d1b3a'); g.addColorStop(1, '#2b4a7a');
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
@@ -1184,10 +1483,12 @@ function render(dt) {
   drawStands(t);
   drawGround();
   drawBoards();
+  drawScorch();
   drawLandMark();
   const k = FLIP ? -1 : 1;
   const items = [[A.y * k, () => drawPlayer(A, 'A')], [0, drawNet], [0, drawUmpire], [P.y * k, () => drawPlayer(P, 'P')], [ball.y * k, drawBall]];
   items.sort((a, b) => a[0] - b[0]).forEach(i => i[1]());
+  drawFx();
   const v = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.35, W / 2, H * 0.55, Math.max(W, H) * 0.8);
   v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.35)');
   ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
@@ -1199,13 +1500,14 @@ function render(dt) {
 function demo() {
   const t = performance.now() / 1000;
   P.x = Math.sin(t * 0.7) * 2; A.x = Math.sin(t * 0.9 + 1) * 2;
-  P.y = 12.5; A.y = -12.5; P.swing = A.swing = 0;
-  ball.held = false; ball.x = Math.sin(t * 0.6) * 2.5;
+  P.y = 12.5; A.y = -12.5; P.swing = A.swing = 0; P.z = A.z = 0;
+  ball.held = false; ball.fire = false; ball.x = Math.sin(t * 0.6) * 2.5;
   const ph = (t % 2.4) / 2.4; ball.y = -11.5 + 23 * (ph < 0.5 ? ph * 2 : 2 - ph * 2);
   ball.z = 0.9 + Math.abs(Math.sin(ph * Math.PI * 2)) * 1.6; ball.trail = [];
 }
 
-let last = performance.now(), sendAcc = 0;
+let last = performance.now(), sendAcc = 0, lastEn = -1;
+const bFire = document.getElementById('bFire');
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -1217,6 +1519,7 @@ function loop(now) {
     if (sendAcc >= 1 / 60 - 0.002) { sendAcc = 0; try { net.conn.send(snapshot()); } catch (e) {} }
   }
   if (!paused) {
+    stepFx(dt * TS);
     cheer = Math.max(0, cheer - dt);
     for (const p of [P, A]) {
       const d = Math.hypot(p.x - (p.lx ?? p.x), p.y - (p.ly ?? p.y));
@@ -1228,6 +1531,10 @@ function loop(now) {
     }
   }
   try { render(paused ? 0 : dt); } catch (e) { console.error(e); }
+  if (isTouch && sc) {
+    const en = Math.round(obj(me()).en / 5) * 5;
+    if (en !== lastEn) { lastEn = en; bFire.style.setProperty('--en', en + '%'); bFire.classList.toggle('ready', en >= FIRE_COST); }
+  }
 }
 requestAnimationFrame(loop);
 </script>
