@@ -234,7 +234,7 @@ let msg = { main: '', sub: '', t: 0 }, pops = [];
 const P = { x: 0, y: 12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#e8443a' };
 const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0 };
 let gt = 0;                // 遊戲時間（給電腦算跳躍時機）
-let fx = [], scorch = [];  // 特效粒子、地上的焦痕
+let fx = [];  // 特效粒子
 const obj = w => (w === 'P' ? P : A);
 const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, g: G };
 
@@ -242,7 +242,7 @@ function newMatch() {
   D = DIFFS[diffKey];
   sc = { pts: { P: 0, A: 0 }, games: { P: 0, A: 0 }, tb: false, tbFirst: 'P', gameServer: 'P' };
   matchOver = null; serveTry = 1;
-  P.en = A.en = FIRE_COST; fx = []; scorch = [];
+  P.en = A.en = FIRE_COST; fx = [];
   mode = 'play'; paused = false;
   setupServe();
   showMsg('比賽開始！', '{P}先發球');
@@ -606,7 +606,6 @@ function spawnBurst(x, y, z, kind) {
   if (!isFinite(x + y + z)) return;
   if (kind === 'fire') {
     for (let i = 0; i < 26; i++) fx.push({ x, y, z: z + 0.1, vx: rand(-4, 4), vy: rand(-4, 4), vz: rand(1, 6), life: rand(0.3, 0.7), max: 0.7, col: pick(FIRE_COLS), r: rand(0.08, 0.18), g: -2 });
-    if (z < 0.3) { scorch.push({ x, y, t: 6 }); if (scorch.length > 14) scorch.shift(); }
   } else if (kind === 'smash') {
     for (let i = 0; i < 18; i++) fx.push({ x, y, z, vx: rand(-6, 6), vy: rand(-6, 6), vz: rand(-6, 6), life: rand(0.2, 0.45), max: 0.45, col: pick(['#ffffff', '#e9ff4f', '#bde0fe']), r: rand(0.05, 0.11), glow: true, g: 0 });
     fx.push({ ring: true, x, y, z, life: 0.35, max: 0.35, col: '#ffffff' });
@@ -622,8 +621,6 @@ function stepFx(dt) {
     f.vx *= 1 - 2 * dt; f.vy *= 1 - 2 * dt;
   }
   fx = fx.filter(f => f.life > 0);
-  for (const m of scorch) m.t -= dt;
-  scorch = scorch.filter(m => m.t > 0);
   // 火球尾巴
   if (ball.fire && !ball.held && mode === 'play') {
     for (let i = 0; i < 4; i++) fx.push({ x: ball.x + rand(-0.08, 0.08), y: ball.y + rand(-0.08, 0.08), z: ball.z + rand(-0.08, 0.08), vx: rand(-0.6, 0.6), vy: rand(-0.6, 0.6), vz: rand(0.3, 1.6), life: rand(0.2, 0.45), max: 0.45, col: pick(FIRE_COLS), r: rand(0.09, 0.18), g: -1 });
@@ -1333,13 +1330,6 @@ function drawBall() {
   ctx.beginPath(); ctx.arc(p[0] - r * 0.9, p[1], r * 0.8, -0.9, 0.9); ctx.stroke();
   ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, TAU); ctx.stroke();
 }
-function drawScorch() {
-  for (const m of scorch) {
-    const p = P3(m.x, m.y, 0), a = Math.min(1, m.t / 2) * 0.55;
-    ell(p[0], p[1], 0.55 * p[2], 0.22 * p[2], `rgba(30,15,5,${a})`);
-    ell(p[0], p[1], 0.3 * p[2], 0.12 * p[2], `rgba(255,90,20,${a * Math.min(1, m.t / 5)})`);
-  }
-}
 function drawFx() {
   ctx.save();
   for (const f of fx) {
@@ -1458,7 +1448,6 @@ function render(dt) {
   drawStands(t);
   drawGround();
   drawBoards();
-  drawScorch();
   const k = FLIP ? -1 : 1;
   const items = [[A.y * k, () => drawPlayer(A, 'A')], [0, drawNet], [0, drawUmpire], [P.y * k, () => drawPlayer(P, 'P')], [ball.y * k, drawBall]];
   items.sort((a, b) => a[0] - b[0]).forEach(i => i[1]());
