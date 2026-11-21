@@ -95,7 +95,7 @@
     <div class="help" id="helpKeys">
       <kbd>←↑→↓</kbd> 移動<br>
       <kbd>空白鍵</kbd> / <kbd>J</kbd> 擊球、發球（按一下拋球，球在最高點時再按一下）<br>
-      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>S</kbd> 跳五層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>W</kbd> 🐍 魔球（蛇行球，用半條能量）<br>
+      特殊球（左手）：<kbd>A</kbd> 🔥 火球（能量滿才能用）· <kbd>W</kbd> 跳三層樓高扣殺 · <kbd>D</kbd> 後空翻擊球 · <kbd>F</kbd> 高吊球（按住 <kbd>↓</kbd> 變沖天球）· <kbd>S</kbd> 🐍 魔球（蛇行球，用半條能量）<br>
       <kbd>P</kbd> 暫停（單機）<br>
       擊球瞬間按住 <kbd>←</kbd>/<kbd>→</kbd> 控制落點、按住 <kbd>↑</kbd> 加大力道；提早按會引拍等球，時機越準球越快越穩。<br>
       高吊球會在地上標出落點圈，圈縮到最小時球就落地。
@@ -147,7 +147,7 @@ const HW = 4.115, HL = 11.885, SL = 6.40, DHW = 5.485, NET = 0.914, POST = 5.03;
 const G = 9.8, TS = 0.82, BR = 0.06;
 const CAMY = 31, CAMH = 13;
 const PEER_PREFIX = 'tennis-duel-room-';
-const JG = 24, JUMP_H = 15, JV = Math.sqrt(2 * JG * JUMP_H); // 跳躍：最高 15 公尺（約五層樓）
+const JG = 24, JUMP_H = 9, JV = Math.sqrt(2 * JG * JUMP_H);  // 跳躍：最高 9 公尺（約三層樓）
 const FIRE_COST = 100, SPIN_G = 9;                            // 火球能量、後空翻上旋的額外下墜
 const SNAKE_COST = 50;                                         // 魔球（蛇行球）用半條能量
 const DIFFS = {
@@ -385,7 +385,7 @@ function pressShot(who, type) {
     if (type === 'flip') play('flip');
   }
 }
-// 跳躍：直直往上跳到 15 公尺（約五層樓），空中會自動對準來球扣殺
+// 跳躍：直直往上跳到 9 公尺（約三層樓），空中會自動對準來球扣殺
 function pressJump(who) {
   if (mode !== 'play' || paused) return;
   const p = obj(who);
@@ -429,9 +429,9 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyF' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') localShot('lob');
   // 特殊球：左手 A S D F
   if (e.code === 'KeyA') localShot('fire');
-  if (e.code === 'KeyS') localJump();
+  if (e.code === 'KeyW') localJump();
   if (e.code === 'KeyD') localShot('flip');
-  if (e.code === 'KeyW') localShot('snake');
+  if (e.code === 'KeyS') localShot('snake');
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -502,7 +502,7 @@ $('menuBtn').onclick = toMenu;
 $('resumeBtn').onclick = togglePause;
 $('quitBtn').onclick = toMenu;
 $('pauseBtn').onclick = togglePause;
-if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「🐍魔球」半條能量打出蛇行球 · 「跳」跳五層樓高扣殺 · 「後翻」後空翻擊球';
+if (isTouch) $('helpKeys').innerHTML = '左下搖桿移動 · 「擊球」鍵擊球／發球（按一下拋球，球在最高點再按）<br>「高吊」打高吊球（搖桿往下拉變沖天球）· 擊球瞬間把搖桿推向左／右可控制落點<br>「🔥火球」能量滿時打出火球 · 「🐍魔球」半條能量打出蛇行球 · 「跳」跳三層樓高扣殺 · 「後翻」後空翻擊球';
 
 // ====== 連線對戰（WebRTC / PeerJS）======
 function loadPeer() {
@@ -803,6 +803,13 @@ function onBounce() {
   }
 }
 
+// 球碰到圍欄：還沒落地 → 出界（打的人失分）；已經在對方場內彈過一次 → 對方沒接到（打的人得分）
+function onFence() {
+  const b = ball, hitter = b.lastHitter;
+  if (b.bounces === 0) b.isServe ? fault('發球出界！') : pointTo(opp(hitter), '出界！');
+  else if (b.bounces === 1) pointTo(hitter, b.isServe ? 'ACE！' : '致勝球！');
+}
+
 // ====== 球的物理 ======
 function stepBall(dt) {
   const b = ball;
@@ -815,9 +822,11 @@ function stepBall(dt) {
     if (b.bounces === 0 && !b.netHit) { const k = b.snake; k.t += dt; const o = snakeOff(k, k.t); b.x += o - k.off; k.off = o; }
     else b.snake = null;
   }
-  // 場邊圍欄
-  if (Math.abs(b.y) > 18) { b.y = Math.sign(b.y) * 18; b.vy *= -0.3; b.vx *= 0.5; }
-  if (Math.abs(b.x) > 10) { b.x = Math.sign(b.x) * 10; b.vx *= -0.3; b.vy *= 0.5; }
+  // 場邊圍欄：球一碰到圍欄就是死球
+  let fence = false;
+  if (Math.abs(b.y) > 18) { b.y = Math.sign(b.y) * 18; b.vy *= -0.3; b.vx *= 0.5; fence = true; }
+  if (Math.abs(b.x) > 10) { b.x = Math.sign(b.x) * 10; b.vx *= -0.3; b.vy *= 0.5; fence = true; }
+  if (fence && phase === 'rally') onFence();
   if (phase === 'serve') { if (b.z < 0.7 && b.vz < 0) { b.held = true; b.tossed = false; } return; }
   // 網子
   if (!b.netHit && (oy > 0) !== (b.y > 0) && Math.abs(b.x) < POST) {
@@ -837,7 +846,7 @@ function stepBall(dt) {
       if (b.fire) { if (phase === 'rally' && b.bounces === 0) burst(b.x, b.y, 0, 'fire'); else b.fire = false; }
       if (phase === 'rally') onBounce();
     }
-    else { b.vz = 0; }
+    else { b.vz = 0; if (phase === 'rally') onBounce(); }   // 球在地上滾也算落地，不會變成打不完的活球
   }
   if (b.z === 0 && b.vz === 0) { const f = Math.max(0, 1 - 2.5 * dt); b.vx *= f; b.vy *= f; }
 }
@@ -1033,7 +1042,7 @@ function updateBody(who, dt) {
     const t = b.vy * s > 0.3 ? ((p.y - 0.4 * s) - b.y) / b.vy : 0;
     if (Math.hypot(b.x - p.x, b.y - (p.y - 0.4 * s)) < 2.8 || (t > -0.05 && t < 0.5 && Math.abs(contactX(who) - p.x) < 3.2)) {
       const tt = clamp(t, 0, 0.5), gg = b.bounces === 0 ? b.g : G;
-      const tz = clamp(b.z + b.vz * tt - 0.5 * gg * tt * tt - 1.3, 0, JUMP_H + 1);
+      const tz = clamp(b.z + b.vz * tt - 0.5 * gg * tt * tt - 1.3, 0, JUMP_H);
       p.z += (tz - p.z) * Math.min(1, dt * 12); p.vz = 0; mag = true;
       if (p.swing === 0 && p.z > 0.5) { p.swing = 0.0001; p.sType = 'drive'; p.hitDone = false; p.hold = 0; }
     }
@@ -1496,7 +1505,7 @@ function drawRuler(p, who) {
   ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.setLineDash([6, 5]);
   ctx.beginPath(); ctx.moveTo(b0[0], b0[1]); ctx.lineTo(b1[0], b1[1]); ctx.stroke(); ctx.setLineDash([]);
   ctx.font = '700 12px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  for (let f = 1; f <= 5; f++) {
+  for (let f = 1; f * 3 <= JUMP_H; f++) {
     const q = P3(x, p.y, f * 3);
     ctx.fillStyle = p.z >= f * 3 - 0.3 ? '#e9ff4f' : 'rgba(255,255,255,.7)';
     ctx.fillRect(q[0] - 6, q[1] - 1, 12, 2); ctx.fillText(f + 'F', q[0] + 9, q[1]);
@@ -1541,7 +1550,7 @@ function drawHUD() {
   ctx.globalAlpha = full ? 0.6 + 0.4 * Math.sin(performance.now() / 120) : 0.6; ctx.fillText('🔥', x + 7, ey + 8); ctx.globalAlpha = 1;
   const half = en >= SNAKE_COST;
   ctx.font = '600 11px system-ui,sans-serif'; ctx.fillStyle = full ? '#ffb347' : half ? '#c9a0ff' : 'rgba(255,255,255,.6)';
-  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 A 打火球！') : half ? (isTouch ? '可用魔球' : '按 W 打魔球') : '能量充能中', x + 140, ey + 8);
+  ctx.fillText(full ? (isTouch ? '已集滿！' : '按 A 打火球！') : half ? (isTouch ? '可用魔球' : '按 S 打魔球') : '能量充能中', x + 140, ey + 8);
   if (mode === 'play' && phase === 'serve') {
     ctx.textAlign = 'center'; ctx.font = '600 15px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.9)';
     const t = curServer === me()
