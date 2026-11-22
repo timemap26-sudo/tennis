@@ -270,6 +270,13 @@ const P = { x: 0, y: 12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0
 const A = { x: 0, y: -12.5, z: 0, vz: 0, en: 100, swing: 0, run: 0, wp: 0, joy: 0, sType: 'drive', hitDone: true, hold: 0, bh: false, color: '#ffd23f', plan: null, react: 0, warp: null };
 let gt = 0;                // 遊戲時間（給電腦算跳躍時機）
 let fx = [];  // 特效粒子
+let marks = [];  // 球落地留下的印子 { x, y, t }
+const MARK_LIFE = 6, MARK_FADE = 2;
+function addMark(x, y) {
+  marks.push({ x, y, t: performance.now() / 1000 });
+  if (marks.length > 8) marks.shift();
+  if (isHost()) { const r = v => Math.round(v * 1000) / 1000; events.push({ k: 'mk', x: r(x), y: r(y) }); }
+}
 const obj = w => (w === 'P' ? P : A);
 const ball = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, held: true, tossed: false, lastHitter: null, bounces: 0, isServe: false, netHit: false, trail: [], fire: false, magic: false, snake: null, g: G };
 
@@ -277,7 +284,7 @@ function newMatch() {
   D = DIFFS[diffKey];
   sc = { pts: { P: 0, A: 0 }, games: { P: 0, A: 0 }, tb: false, tbFirst: 'P', gameServer: 'P' };
   matchOver = null; serveTry = 1;
-  P.en = A.en = FIRE_COST; fx = [];
+  P.en = A.en = FIRE_COST; fx = []; marks = [];
   mode = 'play'; paused = false;
   setupServe();
   showMsg('比賽開始！', '{P}先發球');
@@ -668,6 +675,7 @@ function onGuestData(d) {
     else if (e.k === 'p') pop(e.text, e.who);
     else if (e.k === 's' && SOUNDS[e.n]) SOUNDS[e.n]();
     else if (e.k === 'b') spawnBurst(e.x, e.y, e.z, e.kind);
+    else if (e.k === 'mk') addMark(+e.x || 0, +e.y || 0);
   }
   if (d.mode === 'over' && mode !== 'over') { mode = 'over'; showOver(); }
   else if (d.mode === 'play' && mode === 'over') { mode = 'play'; enterGameUI(); }
@@ -956,8 +964,10 @@ function fault(why) {
   }
 }
 
-function inCourt(x, y) { return Math.abs(x) <= HW + BR && Math.abs(y) <= HL + BR; }
-function inBox(x, y) { return Math.abs(y) <= SL + BR && x * boxSign >= -BR && Math.abs(x) <= HW + BR; }
+// 壓線算界內：判定邊界 = 畫面上白線的「外緣」+ 球半徑（line3 的 w 是半寬），跟看到的印子一致
+const LW = 0.05, LWB = 0.06;
+function inCourt(x, y) { return Math.abs(x) <= HW + LW + BR && Math.abs(y) <= HL + LWB + BR; }
+function inBox(x, y) { return Math.abs(y) <= SL + LW + BR && x * boxSign >= -(LW + BR) && Math.abs(x) <= HW + LW + BR; }
 
 function onBounce() {
   const b = ball; b.bounces++;
@@ -982,7 +992,7 @@ function onFence() {
 function stepBall(dt) {
   const b = ball;
   if (b.held) { holdBall(); return; }
-  const oy = b.y;
+  const ox = b.x, oy = b.y, oz = b.z;
   b.vz -= (b.bounces === 0 ? b.g : G) * dt;
   b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
   // 魔球：落地前左右蛇行
@@ -1008,8 +1018,11 @@ function stepBall(dt) {
   }
   // 彈地
   if (b.z <= 0 && b.vz < 0) {
+    // 回推到真正碰地(z=0)的那一點，判界跟印子都用這個位置，不會因為這一步多飛出去的距離而誤判
+    if (oz > 0 && oz > b.z) { const k = oz / (oz - b.z); b.x = ox + (b.x - ox) * k; b.y = oy + (b.y - oy) * k; }
     b.z = 0;
     if (b.vz < -0.8) {
+      addMark(b.x, b.y);
       const kick = b.bounces === 0 && b.g > G ? 0.95 : 0.8;   // 上旋球落地往前竄
       b.vz = Math.min(-b.vz * 0.72, 11); b.vx *= kick; b.vy *= kick; play('bounce');
       warpBackAll();
@@ -1461,6 +1474,19 @@ function drawGround() {
   for (const x of [-DHW, -HW, HW, DHW]) line3(x, -HL, x, HL);
   line3(0, -SL, 0, SL);
 }
+// 球印：跟網球一樣大（半徑 BR），貼在地上照透視畫，過幾秒淡出
+function drawMarks() {
+  const now = performance.now() / 1000;
+  marks = marks.filter(m => now - m.t < MARK_LIFE);
+  for (const m of marks) {
+    const a = Math.min(1, (MARK_LIFE - (now - m.t)) / MARK_FADE);
+    const c = P3(m.x, m.y, 0), l = P3(m.x - BR, m.y, 0), r = P3(m.x + BR, m.y, 0), n = P3(m.x, m.y - BR, 0), f = P3(m.x, m.y + BR, 0);
+    const rx = Math.max(2.5, Math.abs(r[0] - l[0]) / 2), ry = Math.max(1.2, Math.abs(f[1] - n[1]) / 2);
+    ctx.beginPath(); ctx.ellipse(c[0], c[1], rx, ry, 0, 0, TAU);
+    ctx.fillStyle = `rgba(20,28,45,${0.55 * a})`; ctx.fill();
+    ctx.strokeStyle = `rgba(233,255,79,${0.7 * a})`; ctx.lineWidth = 1; ctx.stroke();
+  }
+}
 function drawNet() {
   const sag = (x) => NET + 0.156 * (x / POST) ** 2;
   quad([[-POST, 0.05], [POST, 0.05], [POST, 0.5], [-POST, 0.5]], 'rgba(0,0,0,.15)');
@@ -1647,6 +1673,7 @@ function drawBall() {
     const p = P3(x, y, z);
     circle(p[0], p[1], Math.max(1.5, (b.fire ? 0.16 : b.magic ? 0.12 : 0.08) * p[2]) * (i / b.trail.length), b.fire ? `rgba(255,${120 + i * 12},40,${0.1 * i})` : b.magic ? `rgba(${200 - i * 12},${110 + i * 16},255,${0.1 * i})` : `rgba(233,255,79,${0.07 * i})`);
   });
+  if (!b.held && b.z < 6) drawShadow(b.x, b.y, 0.09, 0.035, 0.3 * (1 - b.z / 6));   // 地上的影子，看得出球真正在哪裡
   const p = P3(b.x, b.y, b.z), r = Math.max(3, 0.1 * p[2]);
   const wk = mode === 'play' && !b.held && warper();
   if (wk) { drawPersonBall(b, wk, p); return; }
@@ -1806,6 +1833,7 @@ function render(dt) {
   drawLights();
   drawStands(t);
   drawGround();
+  drawMarks();
   drawBoards();
   const k = FLIP ? -1 : 1;
   const items = [[A.y * k, () => drawPlayer(A, 'A')], [0, drawNet], [0, drawUmpire], [P.y * k, () => drawPlayer(P, 'P')], [ball.y * k, drawBall]];
